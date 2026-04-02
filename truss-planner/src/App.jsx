@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   Settings, ZoomIn, ZoomOut, RefreshCw, CheckCircle2, 
   Layers, Maximize, Printer, Save, FolderOpen, Cuboid, 
@@ -9,6 +9,9 @@ import {
 
 const CORNER_SIZE = 15;
 const DEFAULT_PIECES = [20, 50, 70, 100, 120, 150, 170, 200, 220, 250, 270, 300];
+
+// Função externa para garantir IDs únicos puros fora do render
+const generateId = () => 'box-' + Date.now() + Math.floor(Math.random() * 1000);
 
 const solveTruss = (target, pieces) => {
   if (target <= 0) return { pieces: [], exact: true, actualLength: 0 };
@@ -92,7 +95,7 @@ const ThreeDViewer = ({ boxes, bounds, onClose }) => {
   const [isReady, setIsReady] = useState(!!window.THREE);
 
   useEffect(() => {
-    if (window.THREE) { setIsReady(true); return; }
+    if (window.THREE) return; // Removida chamada síncrona setState dentro do efeito
     let script = document.getElementById('threejs-script');
     if (!script) {
       script = document.createElement('script');
@@ -107,6 +110,10 @@ const ThreeDViewer = ({ boxes, bounds, onClose }) => {
 
   useEffect(() => {
     if (!isReady || !containerRef.current) return;
+    
+    // Constante para corrigir o aviso de "referência mutável" no cleanup
+    const container = containerRef.current;
+    
     let scene, camera, renderer, animationId;
     let isDragging = false;
     let isPanning = false;
@@ -114,7 +121,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose }) => {
     let previousTouchDist = 0;
 
     const THREE = window.THREE;
-    const container = containerRef.current;
     container.innerHTML = ''; 
 
     scene = new THREE.Scene();
@@ -264,7 +270,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose }) => {
       camera.lookAt(centerX, 0, centerZ);
     };
 
-    // --- EVENTOS DE RATO ---
     container.addEventListener('mousedown', (e) => { 
       if (e.button === 0) isDragging = true;
       if (e.button === 2) isPanning = true; 
@@ -284,7 +289,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose }) => {
       camera.translateZ(Math.sign(e.deltaY) * 50);
     }, { passive: false });
 
-    // --- EVENTOS MOBILE (TOUCH) ---
     container.addEventListener('touchstart', (e) => {
       e.preventDefault();
       if (e.touches.length === 1) {
@@ -322,9 +326,9 @@ const ThreeDViewer = ({ boxes, bounds, onClose }) => {
     return () => {
       if (animationId) cancelAnimationFrame(animationId);
       if (renderer) { renderer.dispose(); renderer.forceContextLoss(); }
-      if (containerRef.current) containerRef.current.innerHTML = '';
+      if (container) container.innerHTML = '';
     };
-  }, [boxes, isReady]);
+  }, [boxes, isReady, bounds]);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900 flex flex-col">
@@ -359,9 +363,10 @@ export default function App() {
   );
 
   const [screwsPerConn, setScrewsPerConn] = useState(4);
-  const [boxes, setBoxes] = useState([
-    { id: 'box-' + Date.now(), name: 'Estrutura 1', w: 400, h: 200, alt: 300, x: 0, y: 0, plan: null, isManual: false }
+  const [boxes, setBoxes] = useState(() => [
+    { id: generateId(), name: 'Estrutura 1', w: 400, h: 200, alt: 300, x: 0, y: 0, plan: null, isManual: false }
   ]);
+  
   const [activeBoxId, setActiveBoxId] = useState(boxes[0].id);
   const activeBox = boxes.find(b => b.id === activeBoxId) || boxes[0];
 
@@ -382,8 +387,8 @@ export default function App() {
   });
   const [newProjectName, setNewProjectName] = useState("");
 
-  const generatePlan = (w, h, alt) => {
-    const available = Object.entries(activePieces).filter(([_, v]) => v).map(([p]) => parseInt(p));
+  const generatePlan = useCallback((w, h, alt) => {
+    const available = Object.entries(activePieces).filter(([, v]) => v).map(([p]) => parseInt(p));
     if (available.length === 0 || w <= 0 || h <= 0) {
       return { top: { pieces: [], actualLength: 0 }, bottom: { pieces: [], actualLength: 0 }, left: { pieces: [], actualLength: 0 }, right: { pieces: [], actualLength: 0 } };
     }
@@ -397,7 +402,9 @@ export default function App() {
       pillarFL: JSON.parse(JSON.stringify(pz)), pillarFR: JSON.parse(JSON.stringify(pz)),
       pillarBL: JSON.parse(JSON.stringify(pz)), pillarBR: JSON.parse(JSON.stringify(pz))
     };
-  };
+  }, [activePieces]);
+
+  const boxesDeps = boxes.map(b => `${b.id}-${b.w}-${b.h}-${b.alt}`).join(',');
 
   useEffect(() => {
     if (skipAutoCalc.current) { skipAutoCalc.current = false; return; }
@@ -405,9 +412,8 @@ export default function App() {
       if (!box.isManual && box.w > 0 && box.h > 0) return { ...box, plan: generatePlan(box.w, box.h, box.alt || 0) };
       return box;
     }));
-  }, [activePieces, boxes.map(b => `${b.id}-${b.w}-${b.h}-${b.alt}`).join(',')]);
+  }, [boxesDeps, generatePlan]);
 
-  // FIX: Escutadores Globais para soltar os objetos se o dedo sair da área
   useEffect(() => {
     const handleGlobalUp = () => {
       setIsDraggingCanvas(false);
@@ -422,7 +428,7 @@ export default function App() {
   }, []);
 
   const addBox = () => {
-    const newBox = { id: 'box-' + Date.now(), name: `Estrutura ${boxes.length + 1}`, w: 300, h: 200, alt: 300, x: 50 * boxes.length, y: 50 * boxes.length, plan: null, isManual: false };
+    const newBox = { id: generateId(), name: `Estrutura ${boxes.length + 1}`, w: 300, h: 200, alt: 300, x: 50 * boxes.length, y: 50 * boxes.length, plan: null, isManual: false };
     setBoxes([...boxes, newBox]);
     setActiveBoxId(newBox.id);
   };
@@ -431,7 +437,7 @@ export default function App() {
     e.stopPropagation();
     const remaining = boxes.filter(b => b.id !== id);
     if (remaining.length === 0) {
-      const newBox = { id: 'box-' + Date.now(), name: `Estrutura 1`, w: 0, h: 0, alt: 0, x: 0, y: 0, plan: null, isManual: false };
+      const newBox = { id: generateId(), name: `Estrutura 1`, w: 0, h: 0, alt: 0, x: 0, y: 0, plan: null, isManual: false };
       setBoxes([newBox]);
       setActiveBoxId(newBox.id);
     } else {
@@ -444,7 +450,7 @@ export default function App() {
 
   const handlePieceClick = (boxId, edgeId, index, length, clientX, clientY) => {
     setActiveBoxId(boxId);
-    const available = Object.entries(activePieces).filter(([_, v]) => v).map(([p]) => parseInt(p));
+    const available = Object.entries(activePieces).filter(([, v]) => v).map(([p]) => parseInt(p));
     const splits = getValidSplits(length, available);
     setEditingPiece({ boxId, edgeId, index, length, splits, x: clientX, y: clientY });
   };
@@ -484,7 +490,6 @@ export default function App() {
     localStorage.setItem('trussProjects', JSON.stringify(updated));
   };
 
-  // --- INTERAÇÕES RATO (CANVAS) ---
   const handleWheel = (e) => {
     const scaleBy = 1.1;
     const newScale = e.deltaY > 0 ? scale / scaleBy : scale * scaleBy;
@@ -508,7 +513,6 @@ export default function App() {
     }
   };
 
-  // --- INTERAÇÕES MOBILE TOUCH (CANVAS) ---
   const handleTouchStartCanvas = (e) => {
     if (editingPiece) return;
     if (e.touches.length === 1) {
@@ -607,7 +611,21 @@ export default function App() {
             className="group-hover:fill-blue-50 group-hover:stroke-blue-500 group-hover:stroke-2" vectorEffect="non-scaling-stroke" />
           <line x1={isHorizontal ? rectX : rectX+3} y1={isHorizontal ? rectY+3 : rectY} x2={isHorizontal ? rectX+rectW : rectX+3} y2={isHorizontal ? rectY+3 : rectY+rectH} stroke="#cbd5e1" strokeWidth="0.5" vectorEffect="non-scaling-stroke"/>
           <line x1={isHorizontal ? rectX : rectX+12} y1={isHorizontal ? rectY+12 : rectY} x2={isHorizontal ? rectX+rectW : rectX+12} y2={isHorizontal ? rectY+12 : rectY+rectH} stroke="#cbd5e1" strokeWidth="0.5" vectorEffect="non-scaling-stroke"/>
-          <text x={textX} y={textY} transform={`rotate(${isHorizontal ? 0 : -90} ${textX} ${textY})`} textAnchor="middle" dominantBaseline="central" fontSize="6" fill="#0f172a" fontWeight="600" style={{ pointerEvents: 'none' }}>{p}</text>
+          
+          <text x={textX} y={textY} 
+                transform={`rotate(${isHorizontal ? 0 : -90} ${textX} ${textY})`} 
+                textAnchor="middle" 
+                dominantBaseline="central" 
+                fontSize="6.5" 
+                fill="#0f172a" 
+                fontWeight="800" 
+                stroke="#ffffff" 
+                strokeWidth="2.5" 
+                paintOrder="stroke" 
+                strokeLinejoin="round"
+                style={{ pointerEvents: 'none' }}>
+            {p}
+          </text>
         </g>
       );
       currentPos += p; return element;
@@ -626,7 +644,6 @@ export default function App() {
       {show3D && <ThreeDViewer boxes={boxes} bounds={bounds} onClose={() => setShow3D(false)} />}
       <style>{`
         @media print { body * { visibility: hidden; } .print-area, .print-area * { visibility: visible; } .print-area { position: absolute; left: 0; top: 0; width: 100%; height: 100vh; } .no-print { display: none !important; } }
-        /* Esconder scrollbar nativa para manter design limpo no mobile */
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
@@ -739,6 +756,16 @@ export default function App() {
                 className="flex-1 px-2 py-1 text-sm border border-slate-300 rounded outline-none" />
               <button onClick={saveProject} className="px-3 py-1 bg-slate-800 text-white rounded text-sm hover:bg-slate-700">OK</button>
             </div>
+            <div className="space-y-1 max-h-24 overflow-y-auto hide-scrollbar">
+              {projects.map(p => (
+                <div key={p.id} className="flex justify-between items-center p-2 bg-white border border-slate-200 rounded text-xs hover:border-blue-400">
+                  <button onClick={() => loadProject(p)} className="flex-1 text-left font-medium text-slate-700 flex items-center gap-1 truncate">
+                    <FolderOpen size={12} className="text-blue-500 shrink-0" /> <span className="truncate">{p.name}</span>
+                  </button>
+                  <button onClick={() => deleteProject(p.id)} className="text-red-400 hover:text-red-600 p-1 shrink-0"><Trash2 size={12}/></button>
+                </div>
+              ))}
+            </div>
           </div>
         </aside>
 
@@ -799,7 +826,6 @@ export default function App() {
 
                     return (
                       <g key={box.id} transform={`translate(${box.x}, ${box.y})`}>
-                        {/* Fundo Arrastável - COM SENSAÇÃO TÁTIL */}
                         <rect x="-20" y="-20" width={actW+40} height={actH+40} 
                               fill={isSelected ? (isBeingDragged ? "rgba(59, 130, 246, 0.15)" : "rgba(59, 130, 246, 0.05)") : "transparent"} 
                               stroke={isSelected ? "#3b82f6" : "transparent"} strokeWidth="2" strokeDasharray="5,5" rx="8"
@@ -807,17 +833,22 @@ export default function App() {
                               onTouchStart={(e) => handleBoxTouchStart(e, box.id)} 
                               className="cursor-move" />
 
-                        <g stroke="#94a3b8" strokeWidth="1.5" fontSize="10" fill="#64748b" textAnchor="middle" vectorEffect="non-scaling-stroke">
-                          <line x1="0" y1="-15" x2={actW} y2="-15" />
-                          <line x1="0" y1="-22" x2="0" y2="-8" />
-                          <line x1={actW} y1="-22" x2={actW} y2="-8" />
-                          <rect x={actW/2 - 20} y="-22" width="40" height="14" fill="white" />
-                          <text x={actW/2} y="-11" fontWeight="bold">{actW}</text>
-                          <line x1="-15" y1="0" x2="-15" y2={actH} />
-                          <line x1="-22" y1="0" x2="-8" y2="0" />
-                          <line x1="-22" y1={actH} x2="-8" y2={actH} />
-                          <rect x="-25" y={actH/2 - 20} width="20" height="40" fill="white" />
-                          <text x="-15" y={actH/2} transform={`rotate(-90 -15 ${actH/2})`} fontWeight="bold" dominantBaseline="central">{actH}</text>
+                        <g stroke="#94a3b8" strokeWidth="1.5" vectorEffect="non-scaling-stroke">
+                          <line x1="0" y1="-24" x2={actW} y2="-24" />
+                          <line x1="0" y1="-32" x2="0" y2="-16" />
+                          <line x1={actW} y1="-32" x2={actW} y2="-16" />
+                          <rect x={actW/2 - 28} y="-36" width="56" height="24" rx="12" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" />
+                          <text x={actW/2} y="-24" fill="#0f172a" fontSize="14" fontWeight="900" textAnchor="middle" dominantBaseline="central" stroke="none" style={{ pointerEvents: 'none' }}>
+                            {actW}
+                          </text>
+
+                          <line x1="-24" y1="0" x2="-24" y2={actH} />
+                          <line x1="-32" y1="0" x2="-16" y2="0" />
+                          <line x1="-32" y1={actH} x2="-16" y2={actH} />
+                          <rect x="-36" y={actH/2 - 28} width="24" height="56" rx="12" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" />
+                          <text x="-24" y={actH/2} transform={`rotate(-90 -24 ${actH/2})`} fill="#0f172a" fontSize="14" fontWeight="900" textAnchor="middle" dominantBaseline="central" stroke="none" style={{ pointerEvents: 'none' }}>
+                            {actH}
+                          </text>
                         </g>
 
                         <g fill="#1e293b" stroke="#0f172a" strokeWidth="1">
@@ -841,14 +872,12 @@ export default function App() {
             </div>
           </div>
 
-          {/* NOVA LISTA DE MATERIAIS (BoM) HORIZONTAL MOBILE-FRIENDLY */}
           <div className="bg-white border-t border-slate-200 pb-safe shadow-[0_-5px_15px_rgba(0,0,0,0.05)] z-20 no-print shrink-0 w-full">
             <div className="p-3 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
               <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wide">Lista de Materiais</h3>
               <span className="text-xs font-semibold px-2 py-1 bg-blue-100 text-blue-800 rounded-full">Total: {bom.reduce((acc, item) => acc + item.qty, 0)}</span>
             </div>
             
-            {/* Scroll Horizontal Fluido */}
             <div className="p-3 flex gap-3 overflow-x-auto hide-scrollbar snap-x touch-pan-x">
               {bom.map((item, idx) => (
                 <div key={idx} className="shrink-0 flex items-center justify-between gap-3 p-2 bg-white border border-slate-200 rounded-lg shadow-sm min-w-[160px] snap-start">
