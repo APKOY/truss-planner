@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Settings, ZoomIn, ZoomOut, RefreshCw, CheckCircle2, 
   Layers, Maximize, Printer, Save, FolderOpen, Cuboid, 
@@ -89,13 +89,31 @@ const calcularFerragens = (boxes, parafusosPorConexao = 4) => {
   return { totalConexoes: totalLigacoes, totalParafusos: totalLigacoes * parafusosPorConexao };
 };
 
+// Gerador de plantas movido para fora (Puro e sem dependências do componente)
+const generatePlan = (w, h, alt, activePiecesMap) => {
+  const available = Object.entries(activePiecesMap).filter(([, v]) => v).map(([p]) => parseInt(p));
+  if (available.length === 0 || w <= 0 || h <= 0) {
+    return { top: { pieces: [], actualLength: 0 }, bottom: { pieces: [], actualLength: 0 }, left: { pieces: [], actualLength: 0 }, right: { pieces: [], actualLength: 0 } };
+  }
+  const px = solveTruss(w - CORNER_SIZE * 2, available);
+  const py = solveTruss(h - CORNER_SIZE * 2, available);
+  const pz = alt > 0 ? solveTruss(alt - CORNER_SIZE * 2, available) : { pieces: [], exact: true, actualLength: 0 };
+  
+  return {
+    top: JSON.parse(JSON.stringify(px)), bottom: JSON.parse(JSON.stringify(px)),
+    left: JSON.parse(JSON.stringify(py)), right: JSON.parse(JSON.stringify(py)),
+    pillarFL: JSON.parse(JSON.stringify(pz)), pillarFR: JSON.parse(JSON.stringify(pz)),
+    pillarBL: JSON.parse(JSON.stringify(pz)), pillarBR: JSON.parse(JSON.stringify(pz))
+  };
+};
+
 // --- COMPONENTE VISUALIZADOR 3D ---
 const ThreeDViewer = ({ boxes, bounds, onClose }) => {
   const containerRef = useRef(null);
   const [isReady, setIsReady] = useState(!!window.THREE);
 
   useEffect(() => {
-    if (window.THREE) return; // Removida chamada síncrona setState dentro do efeito
+    if (window.THREE) return; 
     let script = document.getElementById('threejs-script');
     if (!script) {
       script = document.createElement('script');
@@ -111,7 +129,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose }) => {
   useEffect(() => {
     if (!isReady || !containerRef.current) return;
     
-    // Constante para corrigir o aviso de "referência mutável" no cleanup
     const container = containerRef.current;
     
     let scene, camera, renderer, animationId;
@@ -363,14 +380,17 @@ export default function App() {
   );
 
   const [screwsPerConn, setScrewsPerConn] = useState(4);
-  const [boxes, setBoxes] = useState(() => [
-    { id: generateId(), name: 'Estrutura 1', w: 400, h: 200, alt: 300, x: 0, y: 0, plan: null, isManual: false }
-  ]);
+  
+  const [boxes, setBoxes] = useState(() => {
+    const initPieces = DEFAULT_PIECES.reduce((acc, p) => ({ ...acc, [p]: true }), {});
+    const initBox = { id: generateId(), name: 'Estrutura 1', w: 400, h: 200, alt: 300, x: 0, y: 0, plan: null, isManual: false };
+    initBox.plan = generatePlan(initBox.w, initBox.h, initBox.alt, initPieces);
+    return [initBox];
+  });
   
   const [activeBoxId, setActiveBoxId] = useState(boxes[0].id);
   const activeBox = boxes.find(b => b.id === activeBoxId) || boxes[0];
 
-  const skipAutoCalc = useRef(false);
   const svgRef = useRef(null);
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -387,33 +407,6 @@ export default function App() {
   });
   const [newProjectName, setNewProjectName] = useState("");
 
-  const generatePlan = useCallback((w, h, alt) => {
-    const available = Object.entries(activePieces).filter(([, v]) => v).map(([p]) => parseInt(p));
-    if (available.length === 0 || w <= 0 || h <= 0) {
-      return { top: { pieces: [], actualLength: 0 }, bottom: { pieces: [], actualLength: 0 }, left: { pieces: [], actualLength: 0 }, right: { pieces: [], actualLength: 0 } };
-    }
-    const px = solveTruss(w - CORNER_SIZE * 2, available);
-    const py = solveTruss(h - CORNER_SIZE * 2, available);
-    const pz = alt > 0 ? solveTruss(alt - CORNER_SIZE * 2, available) : { pieces: [], exact: true, actualLength: 0 };
-    
-    return {
-      top: JSON.parse(JSON.stringify(px)), bottom: JSON.parse(JSON.stringify(px)),
-      left: JSON.parse(JSON.stringify(py)), right: JSON.parse(JSON.stringify(py)),
-      pillarFL: JSON.parse(JSON.stringify(pz)), pillarFR: JSON.parse(JSON.stringify(pz)),
-      pillarBL: JSON.parse(JSON.stringify(pz)), pillarBR: JSON.parse(JSON.stringify(pz))
-    };
-  }, [activePieces]);
-
-  const boxesDeps = boxes.map(b => `${b.id}-${b.w}-${b.h}-${b.alt}`).join(',');
-
-  useEffect(() => {
-    if (skipAutoCalc.current) { skipAutoCalc.current = false; return; }
-    setBoxes(prev => prev.map(box => {
-      if (!box.isManual && box.w > 0 && box.h > 0) return { ...box, plan: generatePlan(box.w, box.h, box.alt || 0) };
-      return box;
-    }));
-  }, [boxesDeps, generatePlan]);
-
   useEffect(() => {
     const handleGlobalUp = () => {
       setIsDraggingCanvas(false);
@@ -429,6 +422,7 @@ export default function App() {
 
   const addBox = () => {
     const newBox = { id: generateId(), name: `Estrutura ${boxes.length + 1}`, w: 300, h: 200, alt: 300, x: 50 * boxes.length, y: 50 * boxes.length, plan: null, isManual: false };
+    newBox.plan = generatePlan(newBox.w, newBox.h, newBox.alt, activePieces);
     setBoxes([...boxes, newBox]);
     setActiveBoxId(newBox.id);
   };
@@ -446,7 +440,32 @@ export default function App() {
     }
   };
 
-  const updateActiveBox = (updates) => setBoxes(prev => prev.map(b => b.id === activeBoxId ? { ...b, ...updates } : b));
+  // Função centralizada para atualizar as caixas e reagir a mudanças de medidas de forma sincrona e pura
+  const updateActiveBox = (updates) => {
+    setBoxes(prev => prev.map(b => {
+      if (b.id !== activeBoxId) return b;
+      const updatedBox = { ...b, ...updates };
+      // O recálculo inteligente do plano ocorre diretamente aqui, sem a necessidade do useEffect problemático
+      if (!updatedBox.isManual && updatedBox.w > 0 && updatedBox.h > 0) {
+        updatedBox.plan = generatePlan(updatedBox.w, updatedBox.h, updatedBox.alt || 0, activePieces);
+      }
+      return updatedBox;
+    }));
+  };
+
+  const handleTogglePiece = (p) => {
+    setActivePieces(prevPieces => {
+      const nextPieces = { ...prevPieces, [p]: !prevPieces[p] };
+      // Atualiza o plano de todas as caixas não manuais imediatamente ao alterar o stock
+      setBoxes(prevBoxes => prevBoxes.map(box => {
+        if (!box.isManual && box.w > 0 && box.h > 0) {
+          return { ...box, plan: generatePlan(box.w, box.h, box.alt || 0, nextPieces) };
+        }
+        return box;
+      }));
+      return nextPieces;
+    });
+  };
 
   const handlePieceClick = (boxId, edgeId, index, length, clientX, clientY) => {
     setActiveBoxId(boxId);
@@ -477,7 +496,6 @@ export default function App() {
   };
 
   const loadProject = (proj) => {
-    skipAutoCalc.current = true;
     setActivePieces(proj.activePieces);
     setBoxes(proj.boxes);
     setActiveBoxId(proj.boxes[0].id);
@@ -713,7 +731,7 @@ export default function App() {
                 <MousePointerClick size={14} className="shrink-0 mt-0.5" />
                 <div>
                   <p className="font-semibold mb-1">Edição Manual</p>
-                  <button onClick={() => { updateActiveBox({ isManual: false }); skipAutoCalc.current = false; }} className="underline font-medium">Resetar</button>
+                  <button onClick={() => updateActiveBox({ isManual: false })} className="underline font-medium">Resetar</button>
                 </div>
               </div>
             ) : (activeBox.w > 0 && activeBox.h > 0) && (
@@ -731,7 +749,7 @@ export default function App() {
             <div className="grid grid-cols-4 md:grid-cols-3 gap-1 max-h-32 overflow-y-auto mb-2 hide-scrollbar">
               {DEFAULT_PIECES.map(p => (
                 <label key={p} className="flex items-center gap-1 p-2 border border-slate-200 rounded cursor-pointer hover:bg-slate-50">
-                  <input type="checkbox" checked={activePieces[p]} onChange={() => setActivePieces(prev => ({ ...prev, [p]: !prev[p] }))}
+                  <input type="checkbox" checked={activePieces[p]} onChange={() => handleTogglePiece(p)}
                     className="w-3 h-3 text-blue-600" />
                   <span className="text-xs font-medium">{p}</span>
                 </label>
@@ -793,7 +811,8 @@ export default function App() {
             </div>
           )}
 
-          <div className="flex-1 bg-white relative overflow-hidden" style={{
+          {/* CLASSE TOUCH-NONE E SELECT-NONE APLICADA AQUI PARA BLOQUEAR O SCROLL DO BROWSER */}
+          <div className="flex-1 bg-white relative overflow-hidden touch-none select-none" style={{
                 backgroundSize: '40px 40px',
                 backgroundImage: 'linear-gradient(to right, #f1f5f9 1px, transparent 1px), linear-gradient(to bottom, #f1f5f9 1px, transparent 1px)'
               }}
