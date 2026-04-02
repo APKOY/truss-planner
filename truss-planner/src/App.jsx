@@ -369,6 +369,7 @@ export default function App() {
   const svgRef = useRef(null);
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  
   const [isDraggingCanvas, setIsDraggingCanvas] = useState(false);
   const [draggingBoxId, setDraggingBoxId] = useState(null);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -405,6 +406,20 @@ export default function App() {
       return box;
     }));
   }, [activePieces, boxes.map(b => `${b.id}-${b.w}-${b.h}-${b.alt}`).join(',')]);
+
+  // FIX: Escutadores Globais para soltar os objetos se o dedo sair da área
+  useEffect(() => {
+    const handleGlobalUp = () => {
+      setIsDraggingCanvas(false);
+      setDraggingBoxId(null);
+    };
+    window.addEventListener('mouseup', handleGlobalUp);
+    window.addEventListener('touchend', handleGlobalUp);
+    return () => {
+      window.removeEventListener('mouseup', handleGlobalUp);
+      window.removeEventListener('touchend', handleGlobalUp);
+    };
+  }, []);
 
   const addBox = () => {
     const newBox = { id: 'box-' + Date.now(), name: `Estrutura ${boxes.length + 1}`, w: 300, h: 200, alt: 300, x: 50 * boxes.length, y: 50 * boxes.length, plan: null, isManual: false };
@@ -492,7 +507,6 @@ export default function App() {
       setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
     }
   };
-  const handleMouseUp = () => { setIsDraggingCanvas(false); setDraggingBoxId(null); };
 
   // --- INTERAÇÕES MOBILE TOUCH (CANVAS) ---
   const handleTouchStartCanvas = (e) => {
@@ -612,6 +626,9 @@ export default function App() {
       {show3D && <ThreeDViewer boxes={boxes} bounds={bounds} onClose={() => setShow3D(false)} />}
       <style>{`
         @media print { body * { visibility: hidden; } .print-area, .print-area * { visibility: visible; } .print-area { position: absolute; left: 0; top: 0; width: 100%; height: 100vh; } .no-print { display: none !important; } }
+        /* Esconder scrollbar nativa para manter design limpo no mobile */
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
 
       {/* HEADER */}
@@ -635,19 +652,19 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden flex-col md:flex-row">
         
         {/* SIDEBAR */}
-        <aside className="w-full md:w-[340px] bg-white border-b md:border-r border-slate-200 flex flex-col shadow-sm z-10 no-print overflow-y-auto shrink-0 md:h-full max-h-[45vh] md:max-h-none">
+        <aside className="w-full md:w-[340px] bg-white border-b md:border-r border-slate-200 flex flex-col shadow-sm z-10 no-print overflow-y-auto shrink-0 md:h-full max-h-[35vh] md:max-h-none">
           
           <div className="p-3 border-b border-slate-100 bg-slate-50">
             <div className="flex justify-between items-center mb-2">
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">Estruturas</h2>
-              <button onClick={addBox} className="flex items-center gap-1 text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold hover:bg-blue-200"><Plus size={14}/> Nova</button>
+              <button onClick={addBox} className="flex items-center gap-1 text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg font-bold hover:bg-blue-200"><Plus size={14}/> Nova Box</button>
             </div>
-            <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
+            <div className="space-y-1 max-h-24 overflow-y-auto pr-1 hide-scrollbar">
               {boxes.map(box => (
                 <div key={box.id} onClick={() => setActiveBoxId(box.id)} 
                      className={`flex justify-between items-center p-2 rounded border cursor-pointer transition-colors ${activeBoxId === box.id ? 'bg-blue-50 border-blue-400 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-200'}`}>
                   <span className="text-sm font-medium truncate flex-1">{box.name}</span>
-                  <button onClick={(e) => removeBox(box.id, e)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={14}/></button>
+                  <button onClick={(e) => removeBox(box.id, e)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={16}/></button>
                 </div>
               ))}
             </div>
@@ -661,17 +678,17 @@ export default function App() {
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">X (cm)</label>
                 <input type="number" value={activeBox.w === 0 ? '' : activeBox.w} placeholder="0" onChange={(e) => updateActiveBox({ w: e.target.value === '' ? 0 : parseInt(e.target.value) })}
-                  className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
+                  className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Y (cm)</label>
                 <input type="number" value={activeBox.h === 0 ? '' : activeBox.h} placeholder="0" onChange={(e) => updateActiveBox({ h: e.target.value === '' ? 0 : parseInt(e.target.value) })}
-                  className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
+                  className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Z (cm)</label>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Alt. Z</label>
                 <input type="number" value={activeBox.alt === 0 ? '' : activeBox.alt} placeholder="0" onChange={(e) => updateActiveBox({ alt: e.target.value === '' ? 0 : parseInt(e.target.value) })}
-                  className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
+                  className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
               </div>
             </div>
             {activeBox.isManual ? (
@@ -694,7 +711,7 @@ export default function App() {
             <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-2">
               <Split size={16} /> Stock
             </h2>
-            <div className="grid grid-cols-4 md:grid-cols-3 gap-1 max-h-32 overflow-y-auto mb-2">
+            <div className="grid grid-cols-4 md:grid-cols-3 gap-1 max-h-32 overflow-y-auto mb-2 hide-scrollbar">
               {DEFAULT_PIECES.map(p => (
                 <label key={p} className="flex items-center gap-1 p-2 border border-slate-200 rounded cursor-pointer hover:bg-slate-50">
                   <input type="checkbox" checked={activePieces[p]} onChange={() => setActivePieces(prev => ({ ...prev, [p]: !prev[p] }))}
@@ -722,16 +739,6 @@ export default function App() {
                 className="flex-1 px-2 py-1 text-sm border border-slate-300 rounded outline-none" />
               <button onClick={saveProject} className="px-3 py-1 bg-slate-800 text-white rounded text-sm hover:bg-slate-700">OK</button>
             </div>
-            <div className="space-y-1 max-h-24 overflow-y-auto">
-              {projects.map(p => (
-                <div key={p.id} className="flex justify-between items-center p-2 bg-white border border-slate-200 rounded text-xs hover:border-blue-400">
-                  <button onClick={() => loadProject(p)} className="flex-1 text-left font-medium text-slate-700 flex items-center gap-1 truncate">
-                    <FolderOpen size={12} className="text-blue-500 shrink-0" /> <span className="truncate">{p.name}</span>
-                  </button>
-                  <button onClick={() => deleteProject(p.id)} className="text-red-400 hover:text-red-600 p-1 shrink-0"><Trash2 size={12}/></button>
-                </div>
-              ))}
-            </div>
           </div>
         </aside>
 
@@ -745,12 +752,12 @@ export default function App() {
                 <h3 className="font-bold text-slate-800 text-sm">Dividir ({editingPiece.length}cm)</h3>
                 <button onClick={() => setEditingPiece(null)} className="p-1"><X size={16} className="text-slate-400 hover:text-red-500"/></button>
               </div>
-              <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
+              <div className="max-h-40 overflow-y-auto space-y-1 pr-1 hide-scrollbar">
                 {editingPiece.splits.length === 0 ? (
                   <p className="text-xs text-amber-600 bg-amber-50 p-2 rounded border border-amber-200">Não há stock compatível.</p>
                 ) : (
                   editingPiece.splits.map((split, idx) => (
-                    <button key={idx} onClick={() => applySplit(split)} className="w-full flex items-center justify-between p-2 text-sm bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-400 rounded">
+                    <button key={idx} onClick={() => applySplit(split)} className="w-full flex items-center justify-between p-3 text-sm bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-400 rounded-lg shadow-sm">
                       <span className="font-medium text-slate-700">{split.join(' + ')}</span><Split size={14} className="text-blue-500"/>
                     </button>
                   ))
@@ -764,17 +771,17 @@ export default function App() {
                 backgroundImage: 'linear-gradient(to right, #f1f5f9 1px, transparent 1px), linear-gradient(to bottom, #f1f5f9 1px, transparent 1px)'
               }}
             onWheel={handleWheel} 
-            onMouseDown={handleMouseDownCanvas} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}
-            onTouchStart={handleTouchStartCanvas} onTouchMove={handleTouchMoveCanvas} onTouchEnd={handleMouseUp} onTouchCancel={handleMouseUp}>
+            onMouseDown={handleMouseDownCanvas} onMouseMove={handleMouseMove}
+            onTouchStart={handleTouchStartCanvas} onTouchMove={handleTouchMoveCanvas}>
             
             <div className="absolute top-2 left-2 z-10 no-print flex items-center gap-1 bg-white/90 px-2 py-1 rounded shadow border border-slate-200 text-xs font-medium text-slate-600 pointer-events-none">
                <Move size={12} className="text-blue-500"/> Arraste
             </div>
 
             <div className="absolute top-2 right-2 flex flex-col gap-1 z-10 no-print">
-              <button onClick={() => setScale(s => Math.min(s * 1.2, 5))} className="p-2 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><ZoomIn size={16} /></button>
-              <button onClick={() => setScale(s => Math.max(s / 1.2, 0.2))} className="p-2 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><ZoomOut size={16} /></button>
-              <button onClick={() => {setScale(1); setPan({x:0,y:0})}} className="p-2 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><Maximize size={16} /></button>
+              <button onClick={() => setScale(s => Math.min(s * 1.2, 5))} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><ZoomIn size={18} /></button>
+              <button onClick={() => setScale(s => Math.max(s / 1.2, 0.2))} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><ZoomOut size={18} /></button>
+              <button onClick={() => {setScale(1); setPan({x:0,y:0})}} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><Maximize size={18} /></button>
             </div>
 
             <div className="w-full h-full flex items-center justify-center pointer-events-none">
@@ -786,11 +793,15 @@ export default function App() {
                     const actH = (box.plan.left?.actualLength || 0) + CORNER_SIZE*2;
                     const actualAlt = box.plan.pillarFL?.pieces.length > 0 ? box.plan.pillarFL.actualLength + CORNER_SIZE*2 : 0;
                     if (actW <= CORNER_SIZE*2) return null;
+                    
                     const isSelected = box.id === activeBoxId;
+                    const isBeingDragged = draggingBoxId === box.id;
 
                     return (
                       <g key={box.id} transform={`translate(${box.x}, ${box.y})`}>
-                        <rect x="-20" y="-20" width={actW+40} height={actH+40} fill={isSelected ? "rgba(59, 130, 246, 0.05)" : "transparent"} 
+                        {/* Fundo Arrastável - COM SENSAÇÃO TÁTIL */}
+                        <rect x="-20" y="-20" width={actW+40} height={actH+40} 
+                              fill={isSelected ? (isBeingDragged ? "rgba(59, 130, 246, 0.15)" : "rgba(59, 130, 246, 0.05)") : "transparent"} 
                               stroke={isSelected ? "#3b82f6" : "transparent"} strokeWidth="2" strokeDasharray="5,5" rx="8"
                               onMouseDown={(e) => handleBoxMouseDown(e, box.id)}
                               onTouchStart={(e) => handleBoxTouchStart(e, box.id)} 
@@ -830,21 +841,25 @@ export default function App() {
             </div>
           </div>
 
-          {/* BoM INFERIOR */}
-          <div className="bg-white border-t border-slate-200 h-24 md:h-32 overflow-y-auto no-print shrink-0">
-            <div className="p-2 bg-slate-50 border-b border-slate-200 sticky top-0 flex justify-between items-center z-10">
+          {/* NOVA LISTA DE MATERIAIS (BoM) HORIZONTAL MOBILE-FRIENDLY */}
+          <div className="bg-white border-t border-slate-200 pb-safe shadow-[0_-5px_15px_rgba(0,0,0,0.05)] z-20 no-print shrink-0 w-full">
+            <div className="p-3 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
               <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wide">Lista de Materiais</h3>
-              <span className="text-xs font-semibold px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full">Total: {bom.reduce((acc, item) => acc + item.qty, 0)}</span>
+              <span className="text-xs font-semibold px-2 py-1 bg-blue-100 text-blue-800 rounded-full">Total: {bom.reduce((acc, item) => acc + item.qty, 0)}</span>
             </div>
-            <div className="p-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+            
+            {/* Scroll Horizontal Fluido */}
+            <div className="p-3 flex gap-3 overflow-x-auto hide-scrollbar snap-x touch-pan-x">
               {bom.map((item, idx) => (
-                <div key={idx} className="flex justify-between items-center p-1.5 bg-white border border-slate-200 rounded shadow-sm">
-                  <span className="text-[10px] md:text-xs font-medium text-slate-700">{item.name}</span>
-                  <span className="text-[10px] md:text-xs font-bold bg-slate-100 text-slate-800 w-5 h-5 flex items-center justify-center rounded-full">{item.qty}</span>
+                <div key={idx} className="shrink-0 flex items-center justify-between gap-3 p-2 bg-white border border-slate-200 rounded-lg shadow-sm min-w-[160px] snap-start">
+                  <span className="text-xs font-medium text-slate-700">{item.name}</span>
+                  <span className="text-xs font-bold bg-slate-100 text-slate-800 w-6 h-6 flex items-center justify-center rounded-full shrink-0">{item.qty}</span>
                 </div>
               ))}
+              {bom.length === 0 && <p className="text-xs text-slate-400 w-full text-center">Nenhuma peça em uso.</p>}
             </div>
           </div>
+
         </main>
       </div>
     </div>
