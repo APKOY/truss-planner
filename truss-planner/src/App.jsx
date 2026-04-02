@@ -534,12 +534,16 @@ export default function App() {
   const handleTouchStartCanvas = (e) => {
     if (editingPiece) return;
     if (e.touches.length === 1) {
-      lastTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      lastTouchRef.current.x = e.touches[0].clientX;
+      lastTouchRef.current.y = e.touches[0].clientY;
       if (!draggingBoxId) {
         setIsDraggingCanvas(true);
         setDragStart({ x: e.touches[0].clientX - pan.x, y: e.touches[0].clientY - pan.y });
       }
     } else if (e.touches.length === 2) {
+      // Bloqueia o arrastar da tela e do box para focar apenas no Zoom
+      setIsDraggingCanvas(false);
+      setDraggingBoxId(null);
       lastTouchRef.current.dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
     }
   };
@@ -549,7 +553,8 @@ export default function App() {
     if (editingPiece) return;
     setActiveBoxId(boxId);
     setDraggingBoxId(boxId);
-    lastTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    lastTouchRef.current.x = e.touches[0].clientX;
+    lastTouchRef.current.y = e.touches[0].clientY;
   };
 
   const handleTouchMoveCanvas = (e) => {
@@ -563,11 +568,14 @@ export default function App() {
        } else if (isDraggingCanvas) {
           setPan({ x: touch.clientX - dragStart.x, y: touch.clientY - dragStart.y });
        }
-       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
+       lastTouchRef.current.x = touch.clientX;
+       lastTouchRef.current.y = touch.clientY;
     } else if (e.touches.length === 2) {
        const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-       const delta = dist / lastTouchRef.current.dist;
-       setScale(s => Math.min(Math.max(0.2, s * delta), 5));
+       if (lastTouchRef.current.dist > 0) {
+         const delta = dist / lastTouchRef.current.dist;
+         setScale(s => Math.min(Math.max(0.2, s * delta), 5));
+       }
        lastTouchRef.current.dist = dist;
     }
   };
@@ -831,7 +839,8 @@ export default function App() {
             </div>
 
             <div className="w-full h-full flex items-center justify-center pointer-events-none">
-              <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: 'center' }} className="transition-transform duration-75 ease-out pointer-events-auto">
+              {/* TRANSITION-TRANSFORM e DURATION-75 REMOVIDOS PARA NÃO BLOQUEAR O PINCH-ZOOM */}
+              <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: 'center' }} className="pointer-events-auto">
                 <svg ref={svgRef} width={Math.max(800, bounds.maxX)} height={Math.max(600, bounds.maxY)} className="drop-shadow-xl overflow-visible">
                   {boxes.map(box => {
                     if (!box.plan) return null;
