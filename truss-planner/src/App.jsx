@@ -145,7 +145,7 @@ const calcularFerragens = (boxes, parafusosPorConexao = 4) => {
 };
 
 const calculateMagneticSnap = (newX, newY, currentBoxId, boxes) => {
-  const SNAP_DIST = 25; 
+  const SNAP_DIST = 15; // Suavizado: Distância menor para a caixa não ficar tão "presa"
   let snappedX = newX;
   let snappedY = newY;
   
@@ -599,6 +599,7 @@ export default function App() {
   const [draggingBoxId, setDraggingBoxId] = useState(null);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const lastTouchRef = useRef({ x: 0, y: 0, dist: 0 });
+  const dragBoxStartRef = useRef({ boxX: 0, boxY: 0, mouseX: 0, mouseY: 0 }); // Novo referencial de memória absoluta para arraste suave
   
   const [editingPiece, setEditingPiece] = useState(null); 
   const [show3D, setShow3D] = useState(false);
@@ -840,16 +841,24 @@ export default function App() {
     if (e.button !== 0 || editingPiece) return;
     recordHistory(); 
     setActiveBoxId(boxId); setDraggingBoxId(boxId);
+    
+    // Memoriza a posição inicial exata para o arraste não ficar preso
+    const box = boxesRef.current.find(b => b.id === boxId);
+    if (box) {
+      dragBoxStartRef.current = { boxX: box.x, boxY: box.y, mouseX: e.clientX, mouseY: e.clientY };
+    }
   };
   
   const handleMouseMove = (e) => {
     if (draggingBoxId) {
+      // Movimento Suave Absoluto: ignora o bloqueio magnético
+      const dx = (e.clientX - dragBoxStartRef.current.mouseX) / scale;
+      const dy = (e.clientY - dragBoxStartRef.current.mouseY) / scale;
+      const rawX = dragBoxStartRef.current.boxX + dx;
+      const rawY = dragBoxStartRef.current.boxY + dy;
+      
       setBoxes(prev => {
-        const currentBox = prev.find(b => b.id === draggingBoxId);
-        if (!currentBox) return prev;
-        const newX = currentBox.x + e.movementX / scale;
-        const newY = currentBox.y + e.movementY / scale;
-        const snapPos = calculateMagneticSnap(newX, newY, draggingBoxId, prev);
+        const snapPos = calculateMagneticSnap(rawX, rawY, draggingBoxId, prev);
         return prev.map(b => b.id === draggingBoxId ? { ...b, x: snapPos.x, y: snapPos.y } : b);
       });
     } else if (isDraggingCanvas) {
@@ -881,22 +890,28 @@ export default function App() {
     setDraggingBoxId(boxId);
     lastTouchRef.current.x = e.touches[0].clientX;
     lastTouchRef.current.y = e.touches[0].clientY;
+    
+    // Memoriza posição para touch
+    const box = boxesRef.current.find(b => b.id === boxId);
+    if (box) {
+      dragBoxStartRef.current = { boxX: box.x, boxY: box.y, mouseX: e.touches[0].clientX, mouseY: e.touches[0].clientY };
+    }
   };
 
   const handleTouchMoveCanvas = (e) => {
     if (editingPiece) return;
     if (e.touches.length === 1) {
        const touch = e.touches[0];
-       const dx = touch.clientX - lastTouchRef.current.x;
-       const dy = touch.clientY - lastTouchRef.current.y;
        
        if (draggingBoxId) {
+          // Movimento suave para Telemóveis
+          const dx = (touch.clientX - dragBoxStartRef.current.mouseX) / scale;
+          const dy = (touch.clientY - dragBoxStartRef.current.mouseY) / scale;
+          const rawX = dragBoxStartRef.current.boxX + dx;
+          const rawY = dragBoxStartRef.current.boxY + dy;
+          
           setBoxes(prev => {
-            const currentBox = prev.find(b => b.id === draggingBoxId);
-            if (!currentBox) return prev;
-            const newX = currentBox.x + dx / scale;
-            const newY = currentBox.y + dy / scale;
-            const snapPos = calculateMagneticSnap(newX, newY, draggingBoxId, prev);
+            const snapPos = calculateMagneticSnap(rawX, rawY, draggingBoxId, prev);
             return prev.map(b => b.id === draggingBoxId ? { ...b, x: snapPos.x, y: snapPos.y } : b);
           });
        } else if (isDraggingCanvas) {
