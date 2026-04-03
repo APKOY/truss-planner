@@ -609,6 +609,9 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('trussProjects')) || []; } catch { return []; }
   });
   const [newProjectName, setNewProjectName] = useState("");
+  
+  // ESTADO PARA OS PAINÉIS MOBILE
+  const [mobilePanel, setMobilePanel] = useState('none'); // 'none', 'settings', 'bom'
 
   const boxesRef = useRef(boxes);
   const activeBoxIdRef = useRef(activeBoxId);
@@ -776,6 +779,7 @@ export default function App() {
     setBoxes(proj.boxes);
     setActiveBoxId(proj.boxes[0].id);
     setEditingPiece(null);
+    setMobilePanel('none'); // Fechar o painel ao carregar no mobile
   };
 
   const deleteProject = (id) => {
@@ -788,7 +792,6 @@ export default function App() {
   const handleExportPDF = () => {
     setIsExportingPDF(true);
     
-    // Aguarda um instante para o React atualizar a interface e revelar a área de impressão
     setTimeout(async () => {
       try {
         if (!window.html2pdf) {
@@ -1018,7 +1021,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-[100dvh] bg-slate-50 font-sans text-slate-900 overflow-hidden print:bg-white print:h-auto" onClick={() => setEditingPiece(null)}>
       
-      {/* VISTAS 3D (Normal ou Apresentação) */}
+      {/* VISTAS 3D */}
       {(show3D || showcaseMode) && (
         <ThreeDViewer 
           boxes={boxes} 
@@ -1032,7 +1035,7 @@ export default function App() {
 
       {/* HEADER NORMAL */}
       {!isExportingPDF && (
-        <header className="bg-slate-900 text-white px-4 py-3 flex justify-between items-center shadow-md z-10 flex-wrap gap-2">
+        <header className="bg-slate-900 text-white px-4 py-3 flex justify-between items-center shadow-md z-10 flex-wrap gap-2 shrink-0">
           <div className="flex items-center gap-2">
             <Layers className="text-blue-400" size={20} />
             <h1 className="text-lg font-bold tracking-tight">TrussPlanner <span className="text-slate-400 font-normal hidden sm:inline">| Eventos</span></h1>
@@ -1043,7 +1046,6 @@ export default function App() {
                 <button onClick={() => setShowcaseMode(true)} className="flex items-center gap-2 px-3 py-2 bg-amber-500 hover:bg-amber-400 text-amber-950 rounded-lg text-sm font-bold shadow-lg transition-colors">
                   <MonitorPlay size={16} /> <span className="hidden lg:inline">Apresentar</span>
                 </button>
-                
                 <button onClick={() => setShow3D(true)} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium shadow-lg transition-colors">
                   <Cuboid size={16} /> <span className="hidden md:inline">Ver 3D</span><span className="md:hidden">3D</span>
                 </button>
@@ -1057,98 +1059,124 @@ export default function App() {
         </header>
       )}
 
-      <div className="flex flex-1 overflow-hidden flex-col md:flex-row">
+      {/* CONTAINER PRINCIPAL DO LAYOUT */}
+      <div className="flex flex-1 overflow-hidden flex-col md:flex-row relative">
         
-        {/* SIDEBAR */}
+        {/* SIDEBAR: Deslizante em Mobile, Estática em Desktop */}
         {!isExportingPDF && (
-          <aside className="w-full md:w-[340px] bg-white border-b md:border-r border-slate-200 flex flex-col shadow-sm z-10 overflow-y-auto shrink-0 md:h-full max-h-[35vh] md:max-h-none">
-            <div className="p-3 border-b border-slate-100 bg-slate-50">
-              <div className="flex justify-between items-center mb-2">
-                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">Estruturas</h2>
-                <button onClick={addBox} className="flex items-center gap-1 text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg font-bold hover:bg-blue-200"><Plus size={14}/> Nova Box</button>
+          <aside className={`w-full md:w-[340px] bg-white border-r border-slate-200 flex flex-col shadow-2xl md:shadow-sm z-40 overflow-hidden shrink-0 h-full absolute md:relative left-0 top-0 transition-transform duration-300 ease-in-out ${mobilePanel === 'settings' ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+            
+            {/* Cabeçalho de Fechar no Mobile */}
+            <div className="md:hidden flex justify-between items-center p-4 bg-slate-900 text-white shrink-0 shadow-md z-10 relative">
+              <h2 className="font-bold text-sm uppercase tracking-wider flex items-center gap-2"><Settings size={18} /> Ajustes da Box</h2>
+              <button onClick={() => setMobilePanel('none')} className="p-1.5 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><X size={18}/></button>
+            </div>
+
+            {/* Conteúdo da Sidebar Rolável */}
+            <div className="flex-1 overflow-y-auto hide-scrollbar flex flex-col">
+              <div className="p-3 border-b border-slate-100 bg-slate-50 shrink-0">
+                <div className="flex justify-between items-center mb-2">
+                  <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">Estruturas</h2>
+                  <button onClick={addBox} className="flex items-center gap-1 text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg font-bold hover:bg-blue-200"><Plus size={14}/> Nova Box</button>
+                </div>
+                <div className="space-y-1 max-h-24 overflow-y-auto pr-1 hide-scrollbar">
+                  {boxes.map(box => (
+                    <div key={box.id} onClick={() => setActiveBoxId(box.id)} 
+                         className={`flex justify-between items-center p-2 rounded border cursor-pointer transition-colors ${activeBoxId === box.id ? 'bg-blue-50 border-blue-400 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-200'}`}>
+                      <span className="text-sm font-medium truncate flex-1">{box.name}</span>
+                      <button onClick={(e) => removeBox(box.id, e)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={16}/></button>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="space-y-1 max-h-24 overflow-y-auto pr-1 hide-scrollbar">
-                {boxes.map(box => (
-                  <div key={box.id} onClick={() => setActiveBoxId(box.id)} 
-                       className={`flex justify-between items-center p-2 rounded border cursor-pointer transition-colors ${activeBoxId === box.id ? 'bg-blue-50 border-blue-400 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-200'}`}>
-                    <span className="text-sm font-medium truncate flex-1">{box.name}</span>
-                    <button onClick={(e) => removeBox(box.id, e)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={16}/></button>
+
+              <div className="p-3 border-b border-slate-100 shrink-0">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-2">
+                  <Settings size={16} /> Dimensões: {activeBox.name}
+                </h2>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">X (cm)</label>
+                    <input type="number" value={activeBox.w === 0 ? '' : activeBox.w} placeholder="0" onChange={(e) => updateActiveBox({ w: e.target.value === '' ? 0 : parseInt(e.target.value) })}
+                      className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
                   </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="p-3 border-b border-slate-100">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-2">
-                <Settings size={16} /> Dimensões: {activeBox.name}
-              </h2>
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">X (cm)</label>
-                  <input type="number" value={activeBox.w === 0 ? '' : activeBox.w} placeholder="0" onChange={(e) => updateActiveBox({ w: e.target.value === '' ? 0 : parseInt(e.target.value) })}
-                    className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Y (cm)</label>
-                  <input type="number" value={activeBox.h === 0 ? '' : activeBox.h} placeholder="0" onChange={(e) => updateActiveBox({ h: e.target.value === '' ? 0 : parseInt(e.target.value) })}
-                    className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Alt. Z</label>
-                  <input type="number" value={activeBox.alt === 0 ? '' : activeBox.alt} placeholder="0" onChange={(e) => updateActiveBox({ alt: e.target.value === '' ? 0 : parseInt(e.target.value) })}
-                    className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
-                </div>
-              </div>
-            </div>
-
-            <div className="p-3 border-b border-slate-100">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-2">
-                <Split size={16} /> Stock
-              </h2>
-              <div className="grid grid-cols-4 md:grid-cols-3 gap-1 max-h-32 overflow-y-auto mb-2 hide-scrollbar">
-                {DEFAULT_PIECES.map(p => (
-                  <label key={p} className="flex items-center gap-1 p-2 border border-slate-200 rounded cursor-pointer hover:bg-slate-50">
-                    <input type="checkbox" checked={activePieces[p]} onChange={() => handleTogglePiece(p)}
-                      className="w-3 h-3 text-blue-600" />
-                    <span className="text-xs font-medium">{p}</span>
-                  </label>
-                ))}
-              </div>
-              <div className="flex items-center justify-between p-2 bg-slate-50 rounded border border-slate-200">
-                 <div className="flex items-center gap-2">
-                   <Wrench size={14} className="text-slate-500"/>
-                   <span className="text-xs font-semibold text-slate-600">Parafusos/Face</span>
-                 </div>
-                 <input type="number" min="1" value={screwsPerConn} onChange={(e) => setScrewsPerConn(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-12 px-1 py-1 border border-slate-300 rounded outline-none text-xs text-center font-bold" />
-              </div>
-            </div>
-
-            <div className="p-3 flex-1 bg-slate-50 hidden md:block">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-2">
-                <Save size={16} /> Guardar
-              </h2>
-              <div className="flex gap-2 mb-2">
-                <input type="text" placeholder="Nome..." value={newProjectName} onChange={e => setNewProjectName(e.target.value)}
-                  className="flex-1 px-2 py-1 text-sm border border-slate-300 rounded outline-none" />
-                <button onClick={saveProject} className="px-3 py-1 bg-slate-800 text-white rounded text-sm hover:bg-slate-700">OK</button>
-              </div>
-              <div className="space-y-1 max-h-24 overflow-y-auto hide-scrollbar">
-                {projects.map(p => (
-                  <div key={p.id} className="flex justify-between items-center p-2 bg-white border border-slate-200 rounded text-xs hover:border-blue-400">
-                    <button onClick={() => loadProject(p)} className="flex-1 text-left font-medium text-slate-700 flex items-center gap-1 truncate">
-                      <FolderOpen size={12} className="text-blue-500 shrink-0" /> <span className="truncate">{p.name}</span>
-                    </button>
-                    <button onClick={() => deleteProject(p.id)} className="text-red-400 hover:text-red-600 p-1 shrink-0"><Trash2 size={12}/></button>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Y (cm)</label>
+                    <input type="number" value={activeBox.h === 0 ? '' : activeBox.h} placeholder="0" onChange={(e) => updateActiveBox({ h: e.target.value === '' ? 0 : parseInt(e.target.value) })}
+                      className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
                   </div>
-                ))}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Alt. Z</label>
+                    <input type="number" value={activeBox.alt === 0 ? '' : activeBox.alt} placeholder="0" onChange={(e) => updateActiveBox({ alt: e.target.value === '' ? 0 : parseInt(e.target.value) })}
+                      className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
+                  </div>
+                </div>
+                {activeBox.isManual ? (
+                  <div className="mt-2 p-2 bg-indigo-50 border border-indigo-200 rounded flex gap-2 text-indigo-800 text-xs">
+                    <MousePointerClick size={14} className="shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold mb-1">Edição Manual</p>
+                      <button onClick={() => updateActiveBox({ isManual: false })} className="underline font-medium">Resetar</button>
+                    </div>
+                  </div>
+                ) : (activeBox.w > 0 && activeBox.h > 0) && (
+                  <div className="mt-2 p-2 bg-emerald-50 border border-emerald-200 rounded flex gap-2 text-emerald-800 text-xs items-center">
+                    <CheckCircle2 size={14} className="shrink-0" />
+                    <p><b>{(activeBox.plan?.top?.actualLength || 0) + 30}x{(activeBox.plan?.left?.actualLength || 0) + 30}</b></p>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-3 border-b border-slate-100 shrink-0">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-2">
+                  <Split size={16} /> Stock
+                </h2>
+                <div className="grid grid-cols-4 md:grid-cols-3 gap-1 max-h-32 overflow-y-auto mb-2 hide-scrollbar">
+                  {DEFAULT_PIECES.map(p => (
+                    <label key={p} className="flex items-center gap-1 p-2 border border-slate-200 rounded cursor-pointer hover:bg-slate-50">
+                      <input type="checkbox" checked={activePieces[p]} onChange={() => handleTogglePiece(p)}
+                        className="w-3 h-3 text-blue-600" />
+                      <span className="text-xs font-medium">{p}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between p-2 bg-slate-50 rounded border border-slate-200">
+                   <div className="flex items-center gap-2">
+                     <Wrench size={14} className="text-slate-500"/>
+                     <span className="text-xs font-semibold text-slate-600">Parafusos/Face</span>
+                   </div>
+                   <input type="number" min="1" value={screwsPerConn} onChange={(e) => setScrewsPerConn(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="w-12 px-1 py-1 border border-slate-300 rounded outline-none text-xs text-center font-bold" />
+                </div>
+              </div>
+
+              {/* Guardar Projeto no Mobile é incorporado diretamente no painel de Materiais ou na Sidebar */}
+              <div className="p-3 flex-1 bg-slate-50 min-h-[150px]">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-2">
+                  <Save size={16} /> Guardar
+                </h2>
+                <div className="flex gap-2 mb-2">
+                  <input type="text" placeholder="Nome..." value={newProjectName} onChange={e => setNewProjectName(e.target.value)}
+                    className="flex-1 px-2 py-1 text-sm border border-slate-300 rounded outline-none" />
+                  <button onClick={saveProject} className="px-3 py-1 bg-slate-800 text-white rounded text-sm hover:bg-slate-700">OK</button>
+                </div>
+                <div className="space-y-1 max-h-24 overflow-y-auto hide-scrollbar">
+                  {projects.map(p => (
+                    <div key={p.id} className="flex justify-between items-center p-2 bg-white border border-slate-200 rounded text-xs hover:border-blue-400">
+                      <button onClick={() => loadProject(p)} className="flex-1 text-left font-medium text-slate-700 flex items-center gap-1 truncate">
+                        <FolderOpen size={12} className="text-blue-500 shrink-0" /> <span className="truncate">{p.name}</span>
+                      </button>
+                      <button onClick={() => deleteProject(p.id)} className="text-red-400 hover:text-red-600 p-1 shrink-0"><Trash2 size={12}/></button>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </aside>
         )}
 
-        {/* ÁREA PRINCIPAL CANVAS E RELATÓRIO PDF */}
-        <main ref={printRef} className={`flex-1 flex flex-col relative ${isExportingPDF ? 'bg-white h-auto block' : 'h-full min-h-[50vh]'}`}>
+        {/* MAIN: CANVAS 2D + LISTA DE MATERIAIS (BOM) */}
+        <main ref={printRef} className={`flex-1 flex flex-col relative ${isExportingPDF ? 'bg-white h-auto block' : 'h-full min-h-0'}`}>
           
           {/* CABEÇALHO DO PDF (SÓ VISÍVEL AO EXPORTAR) */}
           {isExportingPDF && (
@@ -1187,6 +1215,7 @@ export default function App() {
             </div>
           )}
 
+          {/* BARRA DE ATALHOS FLUTUANTE */}
           {!isExportingPDF && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-full shadow-lg border border-slate-700/50">
               <button onClick={handleUndo} disabled={pastHistory.length === 0} className={`p-1.5 rounded-full transition-colors ${pastHistory.length === 0 ? 'text-slate-500 cursor-not-allowed' : 'text-slate-200 hover:text-white hover:bg-slate-700 active:bg-slate-600'}`} title="Desfazer Ação (Ctrl+Z)">
@@ -1202,7 +1231,8 @@ export default function App() {
             </div>
           )}
 
-          <div className={`flex-1 relative overflow-hidden touch-none select-none ${isExportingPDF ? 'bg-white' : ''}`} style={{
+          {/* CANVAS 2D COMPLETO */}
+          <div className={`flex-1 relative touch-none select-none ${isExportingPDF ? 'bg-white overflow-visible' : 'overflow-hidden'}`} style={{
                 backgroundSize: '40px 40px',
                 backgroundImage: isExportingPDF ? 'none' : 'linear-gradient(to right, #f1f5f9 1px, transparent 1px), linear-gradient(to bottom, #f1f5f9 1px, transparent 1px)'
               }}
@@ -1212,7 +1242,7 @@ export default function App() {
             
             {!isExportingPDF && (
               <div className="absolute top-2 left-2 z-10 flex items-center gap-1 bg-white/90 px-2 py-1 rounded shadow border border-slate-200 text-xs font-medium text-slate-600 pointer-events-none">
-                 <Magnet size={12} className="text-blue-500"/> Arraste (Encaixe Automático)
+                 <Magnet size={12} className="text-blue-500"/> Arraste (Encaixe)
               </div>
             )}
 
@@ -1220,7 +1250,7 @@ export default function App() {
               <div className="absolute top-2 right-2 flex flex-col gap-1 z-10">
                 <button onClick={() => setScale(s => Math.min(s * 1.2, 5))} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><ZoomIn size={18} /></button>
                 <button onClick={() => setScale(s => Math.max(s / 1.2, 0.2))} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><ZoomOut size={18} /></button>
-                <button onClick={() => {setScale(1); setPan({x:50, y:50})}} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><Maximize size={18} /></button>
+                <button onClick={() => {setScale(1); setPan({x:50,y:50})}} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><Maximize size={18} /></button>
               </div>
             )}
 
@@ -1309,12 +1339,21 @@ export default function App() {
                 </svg>
               </div>
             </div>
+
           </div>
 
-          {/* LISTA DE MATERIAIS NORMAL (ESCONDIDA AO EXPORTAR PDF) */}
+          {/* PAINEL BOM: Deslizante em Mobile, Estático em Desktop */}
           {!isExportingPDF && (
-            <div className="bg-white border-t border-slate-200 pb-safe shadow-[0_-5px_15px_rgba(0,0,0,0.05)] z-20 shrink-0 w-full">
-              <div className="p-3 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+            <div className={`bg-white border-t border-slate-200 shadow-[0_-15px_40px_rgba(0,0,0,0.2)] md:shadow-none z-40 w-full absolute md:relative bottom-0 left-0 transition-transform duration-300 ease-in-out flex flex-col max-h-[85vh] md:max-h-[35vh] shrink-0 ${mobilePanel === 'bom' ? 'translate-y-0' : 'translate-y-full md:translate-y-0'}`}>
+              
+              {/* Cabeçalho Mobile */}
+              <div className="md:hidden flex justify-between items-center p-4 bg-slate-900 text-white shrink-0 shadow-md z-10 relative">
+                <h3 className="font-bold text-sm uppercase tracking-wider flex items-center gap-2"><Layers size={18} /> Lista de Materiais</h3>
+                <button onClick={() => setMobilePanel('none')} className="p-1.5 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><X size={18}/></button>
+              </div>
+
+              {/* Cabeçalho Desktop */}
+              <div className="hidden md:flex p-3 bg-slate-50 border-b border-slate-200 justify-between items-center shrink-0">
                 <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wide">Lista de Materiais</h3>
                 <div className="flex gap-2">
                   <span className="text-[10px] font-semibold px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full">
@@ -1326,41 +1365,18 @@ export default function App() {
                 </div>
               </div>
               
-              <div className="p-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 max-h-[25vh] overflow-y-auto">
-                {bom.map((item, idx) => (
-                  <div key={idx} className="flex items-center justify-between gap-1 p-2 bg-white border border-slate-200 rounded-lg shadow-sm">
-                    <span className="text-[10px] sm:text-xs font-medium text-slate-700 leading-tight">{item.name}</span>
-                    <span className="text-[10px] sm:text-xs font-bold bg-slate-100 text-slate-800 min-w-[20px] sm:min-w-[24px] px-1.5 h-5 sm:h-6 flex items-center justify-center rounded-full shrink-0">
-                      {item.qty}
-                    </span>
-                  </div>
-                ))}
-                {bom.length === 0 && <p className="text-xs text-slate-400 w-full text-center col-span-full">Nenhuma peça em uso.</p>}
-              </div>
-
-              <div className="p-3 bg-slate-100 border-t border-slate-200 md:hidden flex flex-col gap-2">
-                <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wide flex items-center gap-1"><Save size={12}/> Guardar Projeto</h3>
-                
-                <div className="flex gap-2">
-                  <input type="text" placeholder="Nome do projeto..." value={newProjectName} onChange={e => setNewProjectName(e.target.value)}
-                    className="flex-1 px-3 py-1.5 text-sm border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" />
-                  <button onClick={saveProject} className="px-4 py-1.5 bg-slate-800 text-white rounded-lg text-sm font-medium hover:bg-slate-700 shadow-sm">OK</button>
+              <div className="flex-1 overflow-y-auto hide-scrollbar">
+                <div className="p-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                  {bom.map((item, idx) => (
+                    <div key={idx} className="flex items-center justify-between gap-1 p-2 bg-white border border-slate-200 rounded-lg shadow-sm">
+                      <span className="text-[10px] sm:text-xs font-medium text-slate-700 leading-tight">{item.name}</span>
+                      <span className="text-[10px] sm:text-xs font-bold bg-slate-100 text-slate-800 min-w-[20px] sm:min-w-[24px] px-1.5 h-5 sm:h-6 flex items-center justify-center rounded-full shrink-0">
+                        {item.qty}
+                      </span>
+                    </div>
+                  ))}
+                  {bom.length === 0 && <p className="text-xs text-slate-400 w-full text-center col-span-full">Nenhuma peça em uso.</p>}
                 </div>
-
-                {projects.length > 0 && (
-                  <div className="flex gap-2 overflow-x-auto hide-scrollbar pt-1 pb-1">
-                    {projects.map(p => (
-                      <div key={p.id} className="shrink-0 flex items-center bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
-                        <button onClick={() => loadProject(p)} className="px-3 py-1.5 text-xs font-medium text-slate-700 flex items-center gap-1.5 hover:bg-slate-50">
-                          <FolderOpen size={12} className="text-blue-500" /> <span className="truncate max-w-[100px]">{p.name}</span>
-                        </button>
-                        <button onClick={() => deleteProject(p.id)} className="px-2 py-1.5 bg-red-50 text-red-500 hover:bg-red-100 border-l border-slate-200">
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
           )}
@@ -1392,7 +1408,36 @@ export default function App() {
           )}
 
         </main>
+
+        {/* CORTINA ESCURA (BACKDROP) QUANDO OS PAINÉIS MOBILE ESTÃO ABERTOS */}
+        {!isExportingPDF && mobilePanel !== 'none' && (
+          <div 
+            className="md:hidden absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-30 transition-opacity" 
+            onClick={() => setMobilePanel('none')} 
+            style={{ pointerEvents: 'auto' }}
+          />
+        )}
       </div>
+
+      {/* BARRA DE NAVEGAÇÃO INFERIOR EXCLUSIVA DO MOBILE */}
+      {!isExportingPDF && (
+        <div className="md:hidden flex bg-white border-t border-slate-200 z-50 shrink-0 relative shadow-[0_-5px_20px_rgba(0,0,0,0.1)] pb-4">
+          <button 
+            onClick={() => setMobilePanel(p => p === 'settings' ? 'none' : 'settings')} 
+            className={`flex-1 py-3 flex flex-col items-center gap-1 transition-colors ${mobilePanel === 'settings' ? 'text-blue-600 bg-blue-50' : 'text-slate-500 hover:bg-slate-50'}`}>
+            <Settings size={20} />
+            <span className="text-[10px] font-bold uppercase tracking-wider">Ajustes da Box</span>
+          </button>
+          <div className="w-px bg-slate-200 my-2"></div>
+          <button 
+            onClick={() => setMobilePanel(p => p === 'bom' ? 'none' : 'bom')} 
+            className={`flex-1 py-3 flex flex-col items-center gap-1 transition-colors ${mobilePanel === 'bom' ? 'text-blue-600 bg-blue-50' : 'text-slate-500 hover:bg-slate-50'}`}>
+            <Layers size={20} />
+            <span className="text-[10px] font-bold uppercase tracking-wider">Materiais ({bom.reduce((acc, item) => acc + item.qty, 0)})</span>
+          </button>
+        </div>
+      )}
+
     </div>
   );
 }
