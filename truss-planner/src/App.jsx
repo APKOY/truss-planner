@@ -11,7 +11,6 @@ import {
 const CORNER_SIZE = 15;
 const DEFAULT_PIECES = [20, 50, 70, 100, 120, 150, 170, 200, 220, 250, 270, 300];
 
-// Função externa e pura para geração de IDs
 const generateId = () => 'box-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
 
 const solveTruss = (target, pieces) => {
@@ -63,28 +62,30 @@ const getValidSplits = (targetSize, availablePieces) => {
   return unique;
 };
 
-// Gerador de plantas movido para FORA do componente
+// Gerador de plantas
 const generatePlan = (w, h, alt, activePiecesMap) => {
   const available = Object.entries(activePiecesMap).filter(([, v]) => v).map(([p]) => parseInt(p));
-  if (available.length === 0 || w <= 0 || h <= 0) {
-    return { top: { pieces: [], actualLength: 0 }, bottom: { pieces: [], actualLength: 0 }, left: { pieces: [], actualLength: 0 }, right: { pieces: [], actualLength: 0 }, intermediatePillarsX: [], intermediatePillarsY: [] };
+  
+  if (available.length === 0 || (w <= 0 && h <= 0 && alt <= 0)) {
+    return { top: { pieces: [], actualLength: 0 }, bottom: { pieces: [], actualLength: 0 }, left: { pieces: [], actualLength: 0 }, right: { pieces: [], actualLength: 0 }, pillarFL: { pieces: [], actualLength: 0 }, pillarFR: { pieces: [], actualLength: 0 }, pillarBL: { pieces: [], actualLength: 0 }, pillarBR: { pieces: [], actualLength: 0 }, intermediatePillarsX: [], intermediatePillarsY: [] };
   }
-  const px = solveTruss(w - CORNER_SIZE * 2, available);
-  const py = solveTruss(h - CORNER_SIZE * 2, available);
+  
+  const px = w > 0 ? solveTruss(w - CORNER_SIZE * 2, available) : { pieces: [], exact: true, actualLength: 0 };
+  const py = h > 0 ? solveTruss(h - CORNER_SIZE * 2, available) : { pieces: [], exact: true, actualLength: 0 };
   const pz = alt > 0 ? solveTruss(alt - CORNER_SIZE * 2, available) : { pieces: [], exact: true, actualLength: 0 };
   
   const intPillarsX = [];
   const intPillarsY = [];
   
-  if (alt > 0 && px.actualLength > 0 && py.actualLength > 0) {
-    if (px.actualLength > 600) {
+  if (alt > 0) {
+    if (w > 0 && px.actualLength > 600) {
       const L = px.actualLength;
       const N = Math.floor((L - 1) / 300);
       const span = (N - 1) * 300;
       const offset = (L - span) / 2;
       for (let i = 0; i < N; i++) intPillarsX.push(offset + i * 300);
     }
-    if (py.actualLength > 600) {
+    if (h > 0 && py.actualLength > 600) {
       const L = py.actualLength;
       const N = Math.floor((L - 1) / 300);
       const span = (N - 1) * 300;
@@ -103,63 +104,137 @@ const generatePlan = (w, h, alt, activePiecesMap) => {
   };
 };
 
+// Algoritmo de extração de peças corrigido para não duplicar material em estruturas planas
+const getBoxParts = (box) => {
+  const parts = { edges: [], totalCorners: 0 };
+  if (!box.plan) return parts;
+
+  const hasX = box.w > 0;
+  const hasY = box.h > 0;
+  const hasZ = box.alt > 0;
+
+  if (!hasX && !hasY && !hasZ) return parts;
+
+  const add = (arr) => { if (arr && arr.length > 0) parts.edges.push(arr); };
+
+  // 1. Contagem correta de Cantos
+  let corners = 0;
+  if (hasX && hasY && hasZ) corners = 8;
+  else if ((hasX && hasZ) || (hasY && hasZ) || (hasX && hasY)) corners = 4;
+  else if (hasX || hasY || hasZ) corners = 2;
+
+  // 2. Extração das Arestas exatas
+  if (hasX) {
+    if (hasY) {
+      add(box.plan.top.pieces); 
+      add(box.plan.bottom.pieces); 
+      if (hasZ) {
+        add(box.plan.top.pieces); 
+        add(box.plan.bottom.pieces); 
+      }
+    } else { // Pórtico X (Y=0) -> Apenas um Box!
+      add(box.plan.top.pieces); 
+      if (hasZ) add(box.plan.bottom.pieces); 
+    }
+  }
+
+  if (hasY) {
+    if (hasX) {
+      add(box.plan.left.pieces); 
+      add(box.plan.right.pieces); 
+      if (hasZ) {
+        add(box.plan.left.pieces); 
+        add(box.plan.right.pieces); 
+      }
+    } else { // Pórtico Y (X=0)
+      add(box.plan.left.pieces); 
+      if (hasZ) add(box.plan.left.pieces); 
+    }
+  }
+
+  if (hasZ) {
+    add(box.plan.pillarBL.pieces);
+    if (hasX && hasY) {
+      add(box.plan.pillarBR.pieces);
+      add(box.plan.pillarFL.pieces);
+      add(box.plan.pillarFR.pieces);
+    } else if (hasX && !hasY) {
+      add(box.plan.pillarBR.pieces); // Pórtico X usa apenas pilar direito
+    } else if (hasY && !hasX) {
+      add(box.plan.pillarFL.pieces); // Pórtico Y usa apenas pilar da frente
+    }
+  }
+
+  // 3. Pilares Intermediários
+  if (hasX && box.plan.intermediatePillarsX) {
+    const N = box.plan.intermediatePillarsX.length;
+    if (hasY && hasZ) {
+      corners += N * 4;
+      for (let i=0; i<N; i++) {
+        add(box.plan.pillarFL.pieces);
+        add(box.plan.pillarBL.pieces);
+        add(box.plan.left.pieces); 
+      }
+    } else if (hasZ && !hasY) {
+      corners += N * 2;
+      for (let i=0; i<N; i++) add(box.plan.pillarBL.pieces);
+    } else if (hasY && !hasZ) {
+      corners += N * 2;
+      for (let i=0; i<N; i++) add(box.plan.left.pieces);
+    }
+  }
+
+  if (hasY && box.plan.intermediatePillarsY) {
+    const N = box.plan.intermediatePillarsY.length;
+    if (hasX && hasZ) {
+      corners += N * 4;
+      for (let i=0; i<N; i++) {
+        add(box.plan.pillarBL.pieces);
+        add(box.plan.pillarBR.pieces);
+        add(box.plan.top.pieces); 
+      }
+    } else if (hasZ && !hasX) {
+      corners += N * 2;
+      for (let i=0; i<N; i++) add(box.plan.pillarBL.pieces);
+    } else if (hasX && !hasZ) {
+      corners += N * 2;
+      for (let i=0; i<N; i++) add(box.plan.top.pieces);
+    }
+  }
+
+  parts.totalCorners = corners;
+  return parts;
+};
+
 const calcularFerragens = (boxes, parafusosPorConexao = 4) => {
   let totalLigacoes = 0;
   boxes.forEach(box => {
-    if (!box.plan) return;
-    const contarLigacoesDaAresta = (pecas) => {
-      if (pecas && pecas.length > 0) totalLigacoes += (pecas.length - 1) + 2; 
-    };
-    contarLigacoesDaAresta(box.plan.top?.pieces);
-    contarLigacoesDaAresta(box.plan.bottom?.pieces);
-    contarLigacoesDaAresta(box.plan.left?.pieces);
-    contarLigacoesDaAresta(box.plan.right?.pieces);
-    
-    if (box.alt > 0) {
-      contarLigacoesDaAresta(box.plan.top?.pieces);
-      contarLigacoesDaAresta(box.plan.bottom?.pieces);
-      contarLigacoesDaAresta(box.plan.left?.pieces);
-      contarLigacoesDaAresta(box.plan.right?.pieces);
-      contarLigacoesDaAresta(box.plan.pillarFL?.pieces);
-      contarLigacoesDaAresta(box.plan.pillarFR?.pieces);
-      contarLigacoesDaAresta(box.plan.pillarBL?.pieces);
-      contarLigacoesDaAresta(box.plan.pillarBR?.pieces);
-      
-      if (box.plan.intermediatePillarsX) {
-        box.plan.intermediatePillarsX.forEach(() => {
-          contarLigacoesDaAresta(box.plan.pillarFL?.pieces);
-          contarLigacoesDaAresta(box.plan.pillarFR?.pieces);
-          contarLigacoesDaAresta(box.plan.left?.pieces);
-        });
+    const parts = getBoxParts(box);
+    parts.edges.forEach(edge => {
+      if (edge && edge.length > 0) {
+        totalLigacoes += (edge.length - 1) + 2; 
       }
-      if (box.plan.intermediatePillarsY) {
-        box.plan.intermediatePillarsY.forEach(() => {
-          contarLigacoesDaAresta(box.plan.pillarBL?.pieces);
-          contarLigacoesDaAresta(box.plan.pillarBR?.pieces);
-          contarLigacoesDaAresta(box.plan.top?.pieces);
-        });
-      }
-    }
+    });
   });
   return { totalConexoes: totalLigacoes, totalParafusos: totalLigacoes * parafusosPorConexao };
 };
 
 const calculateMagneticSnap = (newX, newY, currentBoxId, boxes) => {
-  const SNAP_DIST = 15; // Suavizado: Distância menor para a caixa não ficar tão "presa"
+  const SNAP_DIST = 15; 
   let snappedX = newX;
   let snappedY = newY;
   
   const currentBox = boxes.find(b => b.id === currentBoxId);
   if (!currentBox || !currentBox.plan) return { x: newX, y: newY };
   
-  const actW1 = (currentBox.plan.top?.actualLength || 0) + CORNER_SIZE * 2;
-  const actH1 = (currentBox.plan.left?.actualLength || 0) + CORNER_SIZE * 2;
+  const actW1 = currentBox.w > 0 ? (currentBox.plan.top?.actualLength || 0) + CORNER_SIZE * 2 : CORNER_SIZE;
+  const actH1 = currentBox.h > 0 ? (currentBox.plan.left?.actualLength || 0) + CORNER_SIZE * 2 : CORNER_SIZE;
 
   for (let targetBox of boxes) {
     if (targetBox.id === currentBoxId || !targetBox.plan) continue;
     
-    const actW2 = (targetBox.plan.top?.actualLength || 0) + CORNER_SIZE * 2;
-    const actH2 = (targetBox.plan.left?.actualLength || 0) + CORNER_SIZE * 2;
+    const actW2 = targetBox.w > 0 ? (targetBox.plan.top?.actualLength || 0) + CORNER_SIZE * 2 : CORNER_SIZE;
+    const actH2 = targetBox.h > 0 ? (targetBox.plan.left?.actualLength || 0) + CORNER_SIZE * 2 : CORNER_SIZE;
 
     const snapPointsX = [
       targetBox.x,                          
@@ -213,7 +288,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
     let isDragging = false;
     let isPanning = false;
     let previousMousePosition = { x: 0, y: 0 };
-    let previousTouchDist = 0;
 
     const THREE = window.THREE;
     container.innerHTML = ''; 
@@ -221,14 +295,27 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
     scene = new THREE.Scene();
     scene.background = new THREE.Color(showcaseMode ? 0x0f172a : 0xf1f5f9);
 
+    // CÁLCULO DE CENTRO 3D
+    let maxAlt = CORNER_SIZE * 2; 
+    boxes.forEach(box => {
+      if (box.alt > 0) {
+        const h = (box.plan?.pillarFL?.actualLength || 0) + CORNER_SIZE * 2;
+        if (h > maxAlt) maxAlt = h;
+      }
+    });
+
     const centerX = (bounds.maxX + bounds.minX) / 2;
     const centerZ = (bounds.maxY + bounds.minY) / 2;
-    const maxDim = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, 500);
+    const centerY = maxAlt / 2; 
+
+    // Auto-Enquadramento (MaxDim agora ignora limites artificiais vazios)
+    const maxDim = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, maxAlt, 200);
 
     camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 1, 20000);
-    const camDist = showcaseMode ? maxDim * 0.8 : maxDim;
-    camera.position.set(centerX + camDist, camDist * 0.8, centerZ + camDist);
-    camera.lookAt(centerX, 0, centerZ);
+    const camDist = showcaseMode ? maxDim * 1.0 : maxDim * 1.3;
+    
+    camera.position.set(centerX + camDist * 0.7, centerY + camDist * 0.5, centerZ + camDist * 0.9);
+    camera.lookAt(centerX, centerY, centerZ);
 
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
@@ -341,13 +428,27 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
     };
 
     boxes.forEach(box => {
-      const actW = (box.plan.top?.actualLength || 0) + CORNER_SIZE*2;
-      const actH = (box.plan.left?.actualLength || 0) + CORNER_SIZE*2;
-      const actualAlt = box.plan.pillarFL?.pieces.length > 0 ? box.plan.pillarFL.actualLength + CORNER_SIZE*2 : 0;
-      if (actW <= CORNER_SIZE*2 || actH <= CORNER_SIZE*2) return;
+      if (!box.plan) return;
+
+      const hasX = box.w > 0;
+      const hasY = box.h > 0;
+      const hasZ = box.alt > 0;
+
+      if (!hasX && !hasY && !hasZ) return;
+
+      const actW = hasX ? (box.plan.top?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
+      const actH = hasY ? (box.plan.left?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
+      const actualAlt = hasZ ? (box.plan.pillarFL?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
 
       const relX = box.x - centerX;
       const relZ = box.y - centerZ;
+
+      const left = relX + CORNER_SIZE/2; 
+      const right = relX + actW - CORNER_SIZE/2;
+      const topZ = relZ + CORNER_SIZE/2; 
+      const bottomZ = relZ + actH - CORNER_SIZE/2;
+      const bottomY = CORNER_SIZE / 2; 
+      const topY = hasZ ? actualAlt - CORNER_SIZE / 2 : bottomY;
 
       const drawTruss = (x, y, z, length, axis) => {
         const truss = getTrussGroup(length, trussMaterial);
@@ -357,20 +458,19 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
         trussGroup.add(truss);
       };
 
-      const drawCorner = (x, y, z) => {
-        const corner = getCornerGroup(cornerMaterial);
-        corner.position.set(x, y, z);
-        trussGroup.add(corner);
+      const drawnCorners = new Set();
+      const safeDrawCorner = (x, y, z) => {
+        const key = `${x.toFixed(1)},${y.toFixed(1)},${z.toFixed(1)}`;
+        if (!drawnCorners.has(key)) {
+            const corner = getCornerGroup(cornerMaterial);
+            corner.position.set(x, y, z);
+            trussGroup.add(corner);
+            drawnCorners.add(key);
+        }
       };
 
-      const left = relX + CORNER_SIZE/2; const right = relX + actW - CORNER_SIZE/2;
-      const topZ = relZ + CORNER_SIZE/2; const bottomZ = relZ + actH - CORNER_SIZE/2;
-      const bottomY = CORNER_SIZE / 2; const topY = actualAlt > 0 ? actualAlt - CORNER_SIZE / 2 : bottomY;
-
-      drawCorner(left, topY, topZ); drawCorner(right, topY, topZ);
-      drawCorner(left, topY, bottomZ); drawCorner(right, topY, bottomZ);
-
       const drawEdge = (pieces, startX, startY, startZ, axis) => {
+        if (!pieces || pieces.length === 0) return;
         let currentPos = axis === 'x' ? startX : (axis === 'y' ? startY : startZ);
         pieces.forEach(p => {
           let x = startX, y = startY, z = startZ;
@@ -382,69 +482,98 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
         });
       };
 
-      drawEdge(box.plan.top.pieces, left + CORNER_SIZE/2, topY, topZ, 'x');
-      drawEdge(box.plan.bottom.pieces, left + CORNER_SIZE/2, topY, bottomZ, 'x');
-      drawEdge(box.plan.left.pieces, left, topY, topZ + CORNER_SIZE/2, 'z');
-      drawEdge(box.plan.right.pieces, right, topY, topZ + CORNER_SIZE/2, 'z');
+      // Desenhar Cantos Superiores
+      safeDrawCorner(left, topY, topZ); 
+      if (hasX) safeDrawCorner(right, topY, topZ); 
+      if (hasY) safeDrawCorner(left, topY, bottomZ); 
+      if (hasX && hasY) safeDrawCorner(right, topY, bottomZ); 
 
-      const labelX = createTextSprite(`${actW} cm`);
-      labelX.position.set((left + right) / 2, bottomY - 15, bottomZ + 30);
-      trussGroup.add(labelX);
+      // Desenhar Cantos Inferiores
+      if (hasZ) {
+        safeDrawCorner(left, bottomY, topZ);
+        if (hasX) safeDrawCorner(right, bottomY, topZ);
+        if (hasY) safeDrawCorner(left, bottomY, bottomZ);
+        if (hasX && hasY) safeDrawCorner(right, bottomY, bottomZ);
+      }
 
-      const labelZ = createTextSprite(`${actH} cm`);
-      labelZ.position.set(left - 30, bottomY - 15, (topZ + bottomZ) / 2);
-      trussGroup.add(labelZ);
+      // Desenhar Arestas (Faces Superiores)
+      if (hasX) drawEdge(box.plan.top.pieces, left + CORNER_SIZE/2, topY, topZ, 'x');
+      if (hasX && hasY) drawEdge(box.plan.bottom.pieces, left + CORNER_SIZE/2, topY, bottomZ, 'x');
+      if (hasY) drawEdge(box.plan.left.pieces, left, topY, topZ + CORNER_SIZE/2, 'z');
+      if (hasX && hasY) drawEdge(box.plan.right.pieces, right, topY, topZ + CORNER_SIZE/2, 'z');
 
-      if (actualAlt > 0) {
-        drawCorner(left, bottomY, topZ); drawCorner(right, bottomY, topZ);
-        drawCorner(left, bottomY, bottomZ); drawCorner(right, bottomY, bottomZ);
+      // Desenhar Arestas (Faces Inferiores no chão)
+      if (hasZ && hasX) drawEdge(box.plan.bottom?.pieces || [], left + CORNER_SIZE/2, bottomY, topZ, 'x');
+      if (hasZ && hasX && hasY) drawEdge(box.plan.bottom?.pieces || [], left + CORNER_SIZE/2, bottomY, bottomZ, 'x');
+      if (hasZ && hasY) drawEdge(box.plan.left?.pieces || [], left, bottomY, topZ + CORNER_SIZE/2, 'z');
+      if (hasZ && hasX && hasY) drawEdge(box.plan.right?.pieces || [], right, bottomY, topZ + CORNER_SIZE/2, 'z');
 
-        drawEdge(box.plan.top?.pieces || [], left + CORNER_SIZE/2, bottomY, topZ, 'x');
-        drawEdge(box.plan.bottom?.pieces || [], left + CORNER_SIZE/2, bottomY, bottomZ, 'x');
-        drawEdge(box.plan.left?.pieces || [], left, bottomY, topZ + CORNER_SIZE/2, 'z');
-        drawEdge(box.plan.right?.pieces || [], right, bottomY, topZ + CORNER_SIZE/2, 'z');
+      // Desenhar Pilares
+      if (hasZ) {
+        drawEdge(box.plan.pillarBL.pieces, left, CORNER_SIZE, topZ, 'y');
+        if (hasX) drawEdge(box.plan.pillarBR.pieces, right, CORNER_SIZE, topZ, 'y');
+        if (hasY) drawEdge(box.plan.pillarFL.pieces, left, CORNER_SIZE, bottomZ, 'y');
+        if (hasX && hasY) drawEdge(box.plan.pillarFR.pieces, right, CORNER_SIZE, bottomZ, 'y');
+      }
 
-        drawEdge(box.plan.pillarBL?.pieces || [], left, CORNER_SIZE, topZ, 'y');
-        drawEdge(box.plan.pillarBR?.pieces || [], right, CORNER_SIZE, topZ, 'y');
-        drawEdge(box.plan.pillarFL?.pieces || [], left, CORNER_SIZE, bottomZ, 'y');
-        drawEdge(box.plan.pillarFR?.pieces || [], right, CORNER_SIZE, bottomZ, 'y');
+      // Suportes Intermediários X
+      if (hasX && box.plan.intermediatePillarsX) {
+        box.plan.intermediatePillarsX.forEach(xPos => {
+          const absX = relX + (CORNER_SIZE / 2) + xPos; 
+          safeDrawCorner(absX, topY, topZ); 
+          if (hasZ) safeDrawCorner(absX, bottomY, topZ); 
+          if (hasZ) drawEdge(box.plan.pillarBL?.pieces || [], absX, CORNER_SIZE, topZ, 'y'); 
+          
+          if (hasY) {
+            safeDrawCorner(absX, topY, bottomZ); 
+            if (hasZ) safeDrawCorner(absX, bottomY, bottomZ); 
+            if (hasZ) drawEdge(box.plan.pillarFL?.pieces || [], absX, CORNER_SIZE, bottomZ, 'y'); 
+            drawEdge(box.plan.left?.pieces || [], absX, topY, topZ + CORNER_SIZE/2, 'z');
+          }
+        });
+      }
 
-        const labelY = createTextSprite(`${actualAlt + CORNER_SIZE * 2} cm`);
+      // Suportes Intermediários Y
+      if (hasY && box.plan.intermediatePillarsY) {
+        box.plan.intermediatePillarsY.forEach(yPos => {
+          const absZ = relZ + (CORNER_SIZE / 2) + yPos;
+          safeDrawCorner(left, topY, absZ); 
+          if (hasZ) safeDrawCorner(left, bottomY, absZ); 
+          if (hasZ) drawEdge(box.plan.pillarBL?.pieces || [], left, CORNER_SIZE, absZ, 'y'); 
+          
+          if (hasX) {
+            safeDrawCorner(right, topY, absZ); 
+            if (hasZ) safeDrawCorner(right, bottomY, absZ); 
+            if (hasZ) drawEdge(box.plan.pillarBR?.pieces || [], right, CORNER_SIZE, absZ, 'y'); 
+            drawEdge(box.plan.top?.pieces || [], left + CORNER_SIZE/2, topY, absZ, 'x');
+          }
+        });
+      }
+
+      // Rótulos 3D de Medidas
+      if (hasX) {
+        const labelX = createTextSprite(`${actW} cm`);
+        labelX.position.set((left + right) / 2, bottomY - 15, bottomZ + 30);
+        trussGroup.add(labelX);
+      }
+      if (hasY) {
+        const labelZ = createTextSprite(`${actH} cm`);
+        labelZ.position.set(left - 30, bottomY - 15, (topZ + bottomZ) / 2);
+        trussGroup.add(labelZ);
+      }
+      if (hasZ) {
+        const labelY = createTextSprite(`${actualAlt} cm`);
         labelY.position.set(left - 30, (bottomY + topY) / 2, bottomZ + 30);
         trussGroup.add(labelY);
-
-        if (box.plan.intermediatePillarsX) {
-          box.plan.intermediatePillarsX.forEach(xPos => {
-            const absX = left + (CORNER_SIZE / 2) + xPos; 
-            drawCorner(absX, topY, topZ); drawCorner(absX, bottomY, topZ); 
-            drawEdge(box.plan.pillarBL?.pieces || [], absX, CORNER_SIZE, topZ, 'y'); 
-            drawCorner(absX, topY, bottomZ); drawCorner(absX, bottomY, bottomZ); 
-            drawEdge(box.plan.pillarFL?.pieces || [], absX, CORNER_SIZE, bottomZ, 'y'); 
-            drawEdge(box.plan.left?.pieces || [], absX, topY, topZ + CORNER_SIZE/2, 'z');
-          });
-        }
-        if (box.plan.intermediatePillarsY) {
-          box.plan.intermediatePillarsY.forEach(yPos => {
-            const absZ = topZ + (CORNER_SIZE / 2) + yPos;
-            drawCorner(left, topY, absZ); drawCorner(left, bottomY, absZ); 
-            drawEdge(box.plan.pillarBL?.pieces || [], left, CORNER_SIZE, absZ, 'y'); 
-            drawCorner(right, topY, absZ); drawCorner(right, bottomY, absZ); 
-            drawEdge(box.plan.pillarBR?.pieces || [], right, CORNER_SIZE, absZ, 'y'); 
-            drawEdge(box.plan.top?.pieces || [], left + CORNER_SIZE/2, topY, absZ, 'x');
-          });
-        }
-      } else {
-        labelX.position.set((left + right) / 2, bottomY, bottomZ + 30);
-        labelZ.position.set(left - 30, bottomY, (topZ + bottomZ) / 2);
       }
     });
 
     const handleCameraMove = (deltaX, deltaY) => {
       const q = new THREE.Quaternion().setFromEuler(new THREE.Euler((deltaY * Math.PI) / 360, (deltaX * Math.PI) / 360, 0, 'XYZ'));
-      camera.position.sub(new THREE.Vector3(centerX, 0, centerZ));
+      camera.position.sub(new THREE.Vector3(centerX, centerY, centerZ));
       camera.position.applyQuaternion(q);
-      camera.position.add(new THREE.Vector3(centerX, 0, centerZ));
-      camera.lookAt(centerX, 0, centerZ);
+      camera.position.add(new THREE.Vector3(centerX, centerY, centerZ));
+      camera.lookAt(centerX, centerY, centerZ);
     };
 
     container.addEventListener('mousedown', (e) => { 
@@ -471,9 +600,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
       if (e.touches.length === 1) {
         isDragging = true;
         previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      } else if (e.touches.length === 2) {
-        isDragging = false;
-        previousTouchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
       }
     }, { passive: false });
     
@@ -484,10 +610,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
         const deltaY = e.touches[0].clientY - previousMousePosition.y;
         handleCameraMove(deltaX, deltaY);
         previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      } else if (e.touches.length === 2) {
-        const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-        camera.translateZ((previousTouchDist - dist) * 2);
-        previousTouchDist = dist;
       }
     }, { passive: false });
 
@@ -501,12 +623,9 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
 
     const animate = () => { 
       animationId = requestAnimationFrame(animate); 
-      
-      // Auto-rotação no Modo Apresentação se o utilizador não estiver a interagir
       if (showcaseMode && !isDragging && !isPanning) {
         trussGroup.rotation.y += 0.003;
       }
-
       renderer.render(scene, camera); 
     };
     animate();
@@ -520,9 +639,7 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-900 animate-in fade-in zoom-in-95 duration-300">
-      
       {showcaseMode ? (
-        // Overlay Premium para Apresentação ao Cliente
         <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-6 md:p-10">
           <div className="flex justify-between items-start">
             <div>
@@ -544,7 +661,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
           </div>
         </div>
       ) : (
-        // Header Normal da Visão 3D
         <div className="flex justify-between items-center p-4 border-b border-slate-800 text-white shadow-md z-10">
           <h2 className="text-xl font-bold flex items-center gap-2"><Cuboid /> Ambiente 3D</h2>
           <div className="flex items-center gap-4">
@@ -592,6 +708,8 @@ export default function App() {
 
   const svgRef = useRef(null);
   const printRef = useRef(null);
+  const container2DRef = useRef(null);
+  
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 50, y: 50 });
   
@@ -599,7 +717,7 @@ export default function App() {
   const [draggingBoxId, setDraggingBoxId] = useState(null);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const lastTouchRef = useRef({ x: 0, y: 0, dist: 0 });
-  const dragBoxStartRef = useRef({ boxX: 0, boxY: 0, mouseX: 0, mouseY: 0 }); // Novo referencial de memória absoluta para arraste suave
+  const dragBoxStartRef = useRef({ boxX: 0, boxY: 0, mouseX: 0, mouseY: 0 }); 
   
   const [editingPiece, setEditingPiece] = useState(null); 
   const [show3D, setShow3D] = useState(false);
@@ -611,8 +729,7 @@ export default function App() {
   });
   const [newProjectName, setNewProjectName] = useState("");
   
-  // ESTADO PARA OS PAINÉIS MOBILE
-  const [mobilePanel, setMobilePanel] = useState('none'); // 'none', 'settings', 'bom'
+  const [mobilePanel, setMobilePanel] = useState('none'); 
 
   const boxesRef = useRef(boxes);
   const activeBoxIdRef = useRef(activeBoxId);
@@ -623,6 +740,63 @@ export default function App() {
     activeBoxIdRef.current = activeBoxId;
     activePiecesRef.current = activePieces;
   }, [boxes, activeBoxId, activePieces]);
+
+  // CÁLCULO DAS BOUNDS CORRIGIDO (Otimizado para abraçar precisamente as caixas reais)
+  const bounds = useMemo(() => {
+    if (boxes.length === 0) return { minX: 0, minY: 0, maxX: 800, maxY: 600 };
+    
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    
+    boxes.forEach(b => {
+       const actW = (b.w > 0) ? (b.plan?.top?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
+       const actH = (b.h > 0) ? (b.plan?.left?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
+       
+       minX = Math.min(minX, b.x);
+       minY = Math.min(minY, b.y);
+       maxX = Math.max(maxX, b.x + actW);
+       maxY = Math.max(maxY, b.y + actH);
+    });
+    
+    return { 
+      minX: minX - 50, 
+      minY: minY - 50, 
+      maxX: maxX + 50, 
+      maxY: maxY + 50 
+    };
+  }, [boxes]);
+
+  // FUNÇÃO: CENTRALIZAR VISTA 2D (Auto-Enquadramento CAD)
+  const centerView = useCallback(() => {
+    if (!container2DRef.current) return;
+    const { clientWidth, clientHeight } = container2DRef.current;
+    
+    const contentW = bounds.maxX - bounds.minX;
+    const contentH = bounds.maxY - bounds.minY;
+    
+    if (contentW <= 0 || contentH <= 0) return;
+
+    const padding = 80; 
+    let newScale = Math.min(
+      (clientWidth - padding * 2) / contentW,
+      (clientHeight - padding * 2) / contentH,
+      1.5 
+    );
+    if (newScale < 0.1) newScale = 0.1;
+
+    const contentCenterX = bounds.minX + contentW / 2;
+    const contentCenterY = bounds.minY + contentH / 2;
+    
+    const newPanX = (clientWidth / 2) - contentCenterX * newScale;
+    const newPanY = (clientHeight / 2) - contentCenterY * newScale;
+    
+    setScale(newScale);
+    setPan({ x: newPanX, y: newPanY });
+  }, [bounds]);
+
+  useEffect(() => {
+    const t = setTimeout(() => centerView(), 100);
+    return () => clearTimeout(t);
+  }, []); 
 
   const recordHistory = useCallback(() => {
     setPastHistory(prev => {
@@ -696,7 +870,7 @@ export default function App() {
     window.addEventListener('touchend', handleGlobalUp);
     return () => {
       window.removeEventListener('mouseup', handleGlobalUp);
-      window.removeEventListener('tickend', handleGlobalUp);
+      window.removeEventListener('touchend', handleGlobalUp);
     };
   }, []);
 
@@ -726,7 +900,7 @@ export default function App() {
     setBoxes(prev => prev.map(b => {
       if (b.id !== activeBoxId) return b;
       const updatedBox = { ...b, ...updates };
-      if (!updatedBox.isManual && updatedBox.w > 0 && updatedBox.h > 0) {
+      if (!updatedBox.isManual) {
         updatedBox.plan = generatePlan(updatedBox.w, updatedBox.h, updatedBox.alt || 0, activePieces);
       }
       return updatedBox;
@@ -737,7 +911,7 @@ export default function App() {
     setActivePieces(prev => {
       const nextPieces = { ...prev, [p]: !prev[p] };
       setBoxes(prevBoxes => prevBoxes.map(box => {
-        if (!box.isManual && box.w > 0 && box.h > 0) {
+        if (!box.isManual) {
           return { ...box, plan: generatePlan(box.w, box.h, box.alt || 0, nextPieces) };
         }
         return box;
@@ -780,7 +954,7 @@ export default function App() {
     setBoxes(proj.boxes);
     setActiveBoxId(proj.boxes[0].id);
     setEditingPiece(null);
-    setMobilePanel('none'); // Fechar o painel ao carregar no mobile
+    setMobilePanel('none'); 
   };
 
   const deleteProject = (id) => {
@@ -789,10 +963,8 @@ export default function App() {
     localStorage.setItem('trussProjects', JSON.stringify(updated));
   };
 
-  // --- Função Avançada de Exportação PDF Real ---
   const handleExportPDF = () => {
     setIsExportingPDF(true);
-    
     setTimeout(async () => {
       try {
         if (!window.html2pdf) {
@@ -804,7 +976,6 @@ export default function App() {
             document.head.appendChild(script);
           });
         }
-        
         const element = printRef.current;
         const opt = {
           margin:       10,
@@ -813,7 +984,6 @@ export default function App() {
           html2canvas:  { scale: 2, useCORS: true, logging: false },
           jsPDF:        { unit: 'mm', format: 'a4', orientation: 'landscape' }
         };
-        
         await window.html2pdf().set(opt).from(element).save();
       } catch (error) {
         console.error('Erro ao exportar PDF:', error);
@@ -842,7 +1012,6 @@ export default function App() {
     recordHistory(); 
     setActiveBoxId(boxId); setDraggingBoxId(boxId);
     
-    // Memoriza a posição inicial exata para o arraste não ficar preso
     const box = boxesRef.current.find(b => b.id === boxId);
     if (box) {
       dragBoxStartRef.current = { boxX: box.x, boxY: box.y, mouseX: e.clientX, mouseY: e.clientY };
@@ -851,7 +1020,6 @@ export default function App() {
   
   const handleMouseMove = (e) => {
     if (draggingBoxId) {
-      // Movimento Suave Absoluto: ignora o bloqueio magnético
       const dx = (e.clientX - dragBoxStartRef.current.mouseX) / scale;
       const dy = (e.clientY - dragBoxStartRef.current.mouseY) / scale;
       const rawX = dragBoxStartRef.current.boxX + dx;
@@ -891,7 +1059,6 @@ export default function App() {
     lastTouchRef.current.x = e.touches[0].clientX;
     lastTouchRef.current.y = e.touches[0].clientY;
     
-    // Memoriza posição para touch
     const box = boxesRef.current.find(b => b.id === boxId);
     if (box) {
       dragBoxStartRef.current = { boxX: box.x, boxY: box.y, mouseX: e.touches[0].clientX, mouseY: e.touches[0].clientY };
@@ -904,7 +1071,6 @@ export default function App() {
        const touch = e.touches[0];
        
        if (draggingBoxId) {
-          // Movimento suave para Telemóveis
           const dx = (touch.clientX - dragBoxStartRef.current.mouseX) / scale;
           const dy = (touch.clientY - dragBoxStartRef.current.mouseY) / scale;
           const rawX = dragBoxStartRef.current.boxX + dx;
@@ -929,66 +1095,36 @@ export default function App() {
     }
   };
 
-  const bounds = useMemo(() => {
-    let minX = 0, minY = 0, maxX = 800, maxY = 600;
-    if (boxes.length > 0) {
-      minX = Math.min(...boxes.map(b => b.x)) - 50; minY = Math.min(...boxes.map(b => b.y)) - 50;
-      maxX = Math.max(...boxes.map(b => b.x + (b.plan?.top?.actualLength || 0) + 30)) + 50;
-      maxY = Math.max(...boxes.map(b => b.y + (b.plan?.left?.actualLength || 0) + 30)) + 50;
-    }
-    return { minX, minY, maxX, maxY };
-  }, [boxes]);
-
   const bom = useMemo(() => {
-    const list = {}; let totalCorners = 0;
-    boxes.forEach(box => {
-      if (!box.plan) return;
-      const add = (piece) => { list[piece] = (list[piece] || 0) + 1; };
-      box.plan.top?.pieces.forEach(add); box.plan.bottom?.pieces.forEach(add);
-      box.plan.left?.pieces.forEach(add); box.plan.right?.pieces.forEach(add);
-      
-      if (box.alt > 0) {
-        box.plan.top?.pieces.forEach(add); box.plan.bottom?.pieces.forEach(add);
-        box.plan.left?.pieces.forEach(add); box.plan.right?.pieces.forEach(add);
-        box.plan.pillarFL?.pieces.forEach(add); box.plan.pillarFR?.pieces.forEach(add);
-        box.plan.pillarBL?.pieces.forEach(add); box.plan.pillarBR?.pieces.forEach(add);
+    const list = {}; 
+    let totalCorners = 0;
+    let ligacoes = 0;
 
-        if (box.plan.intermediatePillarsX) {
-          box.plan.intermediatePillarsX.forEach(() => {
-            box.plan.pillarFL?.pieces.forEach(add); 
-            box.plan.pillarFR?.pieces.forEach(add); 
-            box.plan.left?.pieces.forEach(add);     
-            totalCorners += 4; 
-          });
-        }
-        if (box.plan.intermediatePillarsY) {
-          box.plan.intermediatePillarsY.forEach(() => {
-            box.plan.pillarBL?.pieces.forEach(add); 
-            box.plan.pillarBR?.pieces.forEach(add); 
-            box.plan.top?.pieces.forEach(add);      
-            totalCorners += 4; 
-          });
-        }
-      }
-      
-      const actW = (box.plan.top?.actualLength || 0) + CORNER_SIZE*2;
-      const actH = (box.plan.left?.actualLength || 0) + CORNER_SIZE*2;
-      if (actW > CORNER_SIZE * 2 || actH > CORNER_SIZE * 2) totalCorners += (box.alt > 0) ? 8 : 4;
+    boxes.forEach(box => {
+      const { edges, totalCorners: c } = getBoxParts(box);
+      totalCorners += c;
+      edges.forEach(edge => {
+        ligacoes += (edge.length - 1) + 2;
+        edge.forEach(p => {
+           list[p] = (list[p] || 0) + 1;
+        });
+      });
     });
     
     const bomArray = Object.entries(list).map(([len, qty]) => ({ name: `Truss ${len}cm`, qty }))
       .sort((a, b) => parseInt(b.name.split(' ')[1]) - parseInt(a.name.split(' ')[1]));
+    
     if (totalCorners > 0) bomArray.unshift({ name: `Cubo/Corner ${CORNER_SIZE}cm`, qty: totalCorners });
     
-    const ferragens = calcularFerragens(boxes, screwsPerConn);
-    if (ferragens.totalConexoes > 0) {
-      bomArray.push({ name: `Uniões / Ligações`, qty: ferragens.totalConexoes });
-      bomArray.push({ name: `Parafusos (Unid.)`, qty: ferragens.totalParafusos });
+    if (ligacoes > 0) {
+      bomArray.push({ name: `Uniões / Ligações`, qty: ligacoes });
+      bomArray.push({ name: `Parafusos (Unid.)`, qty: ligacoes * screwsPerConn });
     }
     return bomArray;
   }, [boxes, screwsPerConn]);
 
   const renderTrussEdge = (boxId, pieces, startX, startY, isHorizontal, edgeId) => {
+    if (!pieces || pieces.length === 0) return null;
     let currentPos = isHorizontal ? startX : startY;
     return pieces.map((p, i) => {
       const id = `${boxId}-${edgeId}-${i}`;
@@ -1036,7 +1172,6 @@ export default function App() {
   return (
     <div className="flex flex-col h-[100dvh] bg-slate-50 font-sans text-slate-900 overflow-hidden print:bg-white print:h-auto" onClick={() => setEditingPiece(null)}>
       
-      {/* VISTAS 3D */}
       {(show3D || showcaseMode) && (
         <ThreeDViewer 
           boxes={boxes} 
@@ -1048,7 +1183,6 @@ export default function App() {
         />
       )}
 
-      {/* HEADER NORMAL */}
       {!isExportingPDF && (
         <header className="bg-slate-900 text-white px-4 py-3 flex justify-between items-center shadow-md z-10 flex-wrap gap-2 shrink-0">
           <div className="flex items-center gap-2">
@@ -1056,7 +1190,7 @@ export default function App() {
             <h1 className="text-lg font-bold tracking-tight">TrussPlanner <span className="text-slate-400 font-normal hidden sm:inline">| Eventos</span></h1>
           </div>
           <div className="flex gap-2">
-            {boxes.some(b => b.w > 30) && (
+            {boxes.some(b => b.w > 0 || b.h > 0 || b.alt > 0) && (
               <>
                 <button onClick={() => setShowcaseMode(true)} className="flex items-center gap-2 px-3 py-2 bg-amber-500 hover:bg-amber-400 text-amber-950 rounded-lg text-sm font-bold shadow-lg transition-colors">
                   <MonitorPlay size={16} /> <span className="hidden lg:inline">Apresentar</span>
@@ -1074,20 +1208,15 @@ export default function App() {
         </header>
       )}
 
-      {/* CONTAINER PRINCIPAL DO LAYOUT */}
       <div className="flex flex-1 overflow-hidden flex-col md:flex-row relative">
         
-        {/* SIDEBAR: Deslizante em Mobile, Estática em Desktop */}
         {!isExportingPDF && (
           <aside className={`w-full md:w-[340px] bg-white border-r border-slate-200 flex flex-col shadow-2xl md:shadow-sm z-40 overflow-hidden shrink-0 h-full absolute md:relative left-0 top-0 transition-transform duration-300 ease-in-out ${mobilePanel === 'settings' ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-            
-            {/* Cabeçalho de Fechar no Mobile */}
             <div className="md:hidden flex justify-between items-center p-4 bg-slate-900 text-white shrink-0 shadow-md z-10 relative">
               <h2 className="font-bold text-sm uppercase tracking-wider flex items-center gap-2"><Settings size={18} /> Ajustes da Box</h2>
               <button onClick={() => setMobilePanel('none')} className="p-1.5 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><X size={18}/></button>
             </div>
 
-            {/* Conteúdo da Sidebar Rolável */}
             <div className="flex-1 overflow-y-auto hide-scrollbar flex flex-col">
               <div className="p-3 border-b border-slate-100 bg-slate-50 shrink-0">
                 <div className="flex justify-between items-center mb-2">
@@ -1112,17 +1241,17 @@ export default function App() {
                 <div className="grid grid-cols-3 gap-2">
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">X (cm)</label>
-                    <input type="number" value={activeBox.w === 0 ? '' : activeBox.w} placeholder="0" onChange={(e) => updateActiveBox({ w: e.target.value === '' ? 0 : parseInt(e.target.value) })}
+                    <input type="number" min="0" value={activeBox.w} onChange={(e) => updateActiveBox({ w: parseInt(e.target.value) || 0 })}
                       className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Y (cm)</label>
-                    <input type="number" value={activeBox.h === 0 ? '' : activeBox.h} placeholder="0" onChange={(e) => updateActiveBox({ h: e.target.value === '' ? 0 : parseInt(e.target.value) })}
+                    <input type="number" min="0" value={activeBox.h} onChange={(e) => updateActiveBox({ h: parseInt(e.target.value) || 0 })}
                       className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Alt. Z</label>
-                    <input type="number" value={activeBox.alt === 0 ? '' : activeBox.alt} placeholder="0" onChange={(e) => updateActiveBox({ alt: e.target.value === '' ? 0 : parseInt(e.target.value) })}
+                    <input type="number" min="0" value={activeBox.alt} onChange={(e) => updateActiveBox({ alt: parseInt(e.target.value) || 0 })}
                       className="w-full p-2 md:p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium" />
                   </div>
                 </div>
@@ -1134,10 +1263,13 @@ export default function App() {
                       <button onClick={() => updateActiveBox({ isManual: false })} className="underline font-medium">Resetar</button>
                     </div>
                   </div>
-                ) : (activeBox.w > 0 && activeBox.h > 0) && (
+                ) : (activeBox.w > 0 || activeBox.h > 0 || activeBox.alt > 0) && (
                   <div className="mt-2 p-2 bg-emerald-50 border border-emerald-200 rounded flex gap-2 text-emerald-800 text-xs items-center">
                     <CheckCircle2 size={14} className="shrink-0" />
-                    <p><b>{(activeBox.plan?.top?.actualLength || 0) + 30}x{(activeBox.plan?.left?.actualLength || 0) + 30}</b></p>
+                    <p><b>
+                      {activeBox.w > 0 ? (activeBox.plan?.top?.actualLength || 0) + 30 : 0}x
+                      {activeBox.h > 0 ? (activeBox.plan?.left?.actualLength || 0) + 30 : 0}
+                    </b></p>
                   </div>
                 )}
               </div>
@@ -1165,7 +1297,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Guardar Projeto no Mobile é incorporado diretamente no painel de Materiais ou na Sidebar */}
               <div className="p-3 flex-1 bg-slate-50 min-h-[150px]">
                 <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-2">
                   <Save size={16} /> Guardar
@@ -1190,10 +1321,8 @@ export default function App() {
           </aside>
         )}
 
-        {/* MAIN: CANVAS 2D + LISTA DE MATERIAIS (BOM) */}
         <main ref={printRef} className={`flex-1 flex flex-col relative ${isExportingPDF ? 'bg-white h-auto block' : 'h-full min-h-0'}`}>
           
-          {/* CABEÇALHO DO PDF (SÓ VISÍVEL AO EXPORTAR) */}
           {isExportingPDF && (
             <div className="flex justify-between items-end border-b-2 border-slate-800 pb-4 mb-6 pt-8 px-10 bg-white">
               <div>
@@ -1230,7 +1359,6 @@ export default function App() {
             </div>
           )}
 
-          {/* BARRA DE ATALHOS FLUTUANTE */}
           {!isExportingPDF && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-full shadow-lg border border-slate-700/50">
               <button onClick={handleUndo} disabled={pastHistory.length === 0} className={`p-1.5 rounded-full transition-colors ${pastHistory.length === 0 ? 'text-slate-500 cursor-not-allowed' : 'text-slate-200 hover:text-white hover:bg-slate-700 active:bg-slate-600'}`} title="Desfazer Ação (Ctrl+Z)">
@@ -1246,8 +1374,7 @@ export default function App() {
             </div>
           )}
 
-          {/* CANVAS 2D COMPLETO */}
-          <div className={`flex-1 relative touch-none select-none ${isExportingPDF ? 'bg-white overflow-visible' : 'overflow-hidden'}`} style={{
+          <div ref={container2DRef} className={`flex-1 relative touch-none select-none ${isExportingPDF ? 'bg-white overflow-visible' : 'overflow-hidden'}`} style={{
                 backgroundSize: '40px 40px',
                 backgroundImage: isExportingPDF ? 'none' : 'linear-gradient(to right, #f1f5f9 1px, transparent 1px), linear-gradient(to bottom, #f1f5f9 1px, transparent 1px)'
               }}
@@ -1257,15 +1384,15 @@ export default function App() {
             
             {!isExportingPDF && (
               <div className="absolute top-2 left-2 z-10 flex items-center gap-1 bg-white/90 px-2 py-1 rounded shadow border border-slate-200 text-xs font-medium text-slate-600 pointer-events-none">
-                 <Magnet size={12} className="text-blue-500"/> Arraste (Encaixe)
+                 <Magnet size={12} className="text-blue-500"/> Arraste (Encaixe Automático)
               </div>
             )}
 
             {!isExportingPDF && (
               <div className="absolute top-2 right-2 flex flex-col gap-1 z-10">
-                <button onClick={() => setScale(s => Math.min(s * 1.2, 5))} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><ZoomIn size={18} /></button>
-                <button onClick={() => setScale(s => Math.max(s / 1.2, 0.2))} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><ZoomOut size={18} /></button>
-                <button onClick={() => {setScale(1); setPan({x:50,y:50})}} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100"><Maximize size={18} /></button>
+                <button onClick={() => setScale(s => Math.min(s * 1.2, 5))} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100" title="Aproximar"><ZoomIn size={18} /></button>
+                <button onClick={() => setScale(s => Math.max(s / 1.2, 0.2))} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100" title="Afastar"><ZoomOut size={18} /></button>
+                <button onClick={centerView} className="p-2.5 bg-white rounded shadow border border-slate-200 text-slate-700 active:bg-slate-100" title="Centralizar Vista"><Maximize size={18} /></button>
               </div>
             )}
 
@@ -1276,13 +1403,25 @@ export default function App() {
                 <svg ref={svgRef} width={isExportingPDF ? Math.max(800, bounds.maxX + 50) : "5000px"} height={isExportingPDF ? Math.max(600, bounds.maxY + 50) : "5000px"} className={isExportingPDF ? 'overflow-visible' : 'drop-shadow-xl overflow-visible'}>
                   {boxes.map(box => {
                     if (!box.plan) return null;
-                    const actW = (box.plan.top?.actualLength || 0) + CORNER_SIZE*2;
-                    const actH = (box.plan.left?.actualLength || 0) + CORNER_SIZE*2;
-                    const actualAlt = box.plan.pillarFL?.pieces.length > 0 ? box.plan.pillarFL.actualLength + CORNER_SIZE*2 : 0;
-                    if (actW <= CORNER_SIZE*2) return null;
+                    
+                    const hasX = box.w > 0;
+                    const hasY = box.h > 0;
+                    const hasZ = box.alt > 0;
+                    
+                    if (!hasX && !hasY && !hasZ) return null;
+
+                    const actW = hasX ? (box.plan.top?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
+                    const actH = hasY ? (box.plan.left?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
+                    const actualAlt = hasZ ? (box.plan.pillarFL?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
                     
                     const isSelected = box.id === activeBoxId && !isExportingPDF;
                     const isBeingDragged = draggingBoxId === box.id && !isExportingPDF;
+
+                    const corners2D = [];
+                    corners2D.push({x: 0, y: 0});
+                    if (hasX) corners2D.push({x: actW - CORNER_SIZE, y: 0});
+                    if (hasY) corners2D.push({x: 0, y: actH - CORNER_SIZE});
+                    if (hasX && hasY) corners2D.push({x: actW - CORNER_SIZE, y: actH - CORNER_SIZE});
 
                     return (
                       <g key={box.id} transform={`translate(${box.x}, ${box.y})`}>
@@ -1293,61 +1432,87 @@ export default function App() {
                               onTouchStart={isExportingPDF ? null : (e) => handleBoxTouchStart(e, box.id)} 
                               className={isExportingPDF ? '' : 'cursor-move'} />
 
-                        {box.alt > 0 && box.plan.intermediatePillarsX?.map((xPos, idx) => {
+                        {hasZ && hasX && box.plan.intermediatePillarsX?.map((xPos, idx) => {
                           const lineX = CORNER_SIZE + xPos;
                           return (
                             <g key={`int-x-${idx}`} style={{ pointerEvents: 'none' }}>
-                              <rect x={lineX - 6} y={CORNER_SIZE} width="12" height={actH - CORNER_SIZE*2} fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
-                              <line x1={lineX} y1={CORNER_SIZE} x2={lineX} y2={actH - CORNER_SIZE} stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="4,4" />
-                              <rect x={lineX - 22} y={actH / 2 - 10} width="44" height="20" rx="4" fill="#ffffff" stroke="#94a3b8" strokeWidth="1" />
-                              <text x={lineX} y={actH / 2} fill="#334155" fontSize="7" fontWeight="800" textAnchor="middle" dominantBaseline="central">SUPORTE</text>
+                              {hasY ? (
+                                <>
+                                  <rect x={lineX - 6} y={CORNER_SIZE} width="12" height={actH - CORNER_SIZE*2} fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
+                                  <line x1={lineX} y1={CORNER_SIZE} x2={lineX} y2={actH - CORNER_SIZE} stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="4,4" />
+                                  <rect x={lineX - 22} y={actH / 2 - 10} width="44" height="20" rx="4" fill="#ffffff" stroke="#94a3b8" strokeWidth="1" />
+                                  <text x={lineX} y={actH / 2} fill="#334155" fontSize="7" fontWeight="800" textAnchor="middle" dominantBaseline="central">SUPORTE</text>
+                                </>
+                              ) : (
+                                <>
+                                  <rect x={lineX} y={0} width={CORNER_SIZE} height={CORNER_SIZE} fill="#1e293b" />
+                                  <text x={lineX + 7.5} y={7.5} fill="white" fontSize="8" fontWeight="bold" textAnchor="middle" dominantBaseline="central">P</text>
+                                </>
+                              )}
                             </g>
                           );
                         })}
 
-                        {box.alt > 0 && box.plan.intermediatePillarsY?.map((yPos, idx) => {
+                        {hasZ && hasY && box.plan.intermediatePillarsY?.map((yPos, idx) => {
                           const lineY = CORNER_SIZE + yPos;
                           return (
                             <g key={`int-y-${idx}`} style={{ pointerEvents: 'none' }}>
-                              <rect x={CORNER_SIZE} y={lineY - 6} width={actW - CORNER_SIZE*2} height="12" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
-                              <line x1={CORNER_SIZE} y1={lineY} x2={actW - CORNER_SIZE} y2={lineY} stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="4,4" />
-                              <rect x={actW / 2 - 22} y={lineY - 10} width="44" height="20" rx="4" fill="#ffffff" stroke="#94a3b8" strokeWidth="1" />
-                              <text x={actW / 2} y={lineY} fill="#334155" fontSize="7" fontWeight="800" textAnchor="middle" dominantBaseline="central">SUPORTE</text>
+                              {hasX ? (
+                                <>
+                                  <rect x={CORNER_SIZE} y={lineY - 6} width={actW - CORNER_SIZE*2} height="12" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
+                                  <line x1={CORNER_SIZE} y1={lineY} x2={actW - CORNER_SIZE} y2={lineY} stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="4,4" />
+                                  <rect x={actW / 2 - 22} y={lineY - 10} width="44" height="20" rx="4" fill="#ffffff" stroke="#94a3b8" strokeWidth="1" />
+                                  <text x={actW / 2} y={lineY} fill="#334155" fontSize="7" fontWeight="800" textAnchor="middle" dominantBaseline="central">SUPORTE</text>
+                                </>
+                              ) : (
+                                <>
+                                  <rect x={0} y={lineY} width={CORNER_SIZE} height={CORNER_SIZE} fill="#1e293b" />
+                                  <text x={7.5} y={lineY + 7.5} fill="white" fontSize="8" fontWeight="bold" textAnchor="middle" dominantBaseline="central">P</text>
+                                </>
+                              )}
                             </g>
                           );
                         })}
 
                         <g stroke="#94a3b8" strokeWidth="1.5" vectorEffect="non-scaling-stroke">
-                          <line x1="0" y1="-24" x2={actW} y2="-24" />
-                          <line x1="0" y1="-32" x2="0" y2="-16" />
-                          <line x1={actW} y1="-32" x2={actW} y2="-16" />
-                          <rect x={actW/2 - 28} y="-36" width="56" height="24" rx="12" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" />
-                          <text x={actW/2} y="-24" fill="#0f172a" fontSize="14" fontWeight="900" textAnchor="middle" dominantBaseline="central" stroke="none" style={{ pointerEvents: 'none' }}>
-                            {actW}
-                          </text>
+                          {hasX && (
+                            <>
+                              <line x1="0" y1="-24" x2={actW} y2="-24" />
+                              <line x1="0" y1="-32" x2="0" y2="-16" />
+                              <line x1={actW} y1="-32" x2={actW} y2="-16" />
+                              <rect x={actW/2 - 28} y="-36" width="56" height="24" rx="12" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" />
+                              <text x={actW/2} y="-24" fill="#0f172a" fontSize="14" fontWeight="900" textAnchor="middle" dominantBaseline="central" stroke="none" style={{ pointerEvents: 'none' }}>
+                                {actW}
+                              </text>
+                            </>
+                          )}
 
-                          <line x1="-24" y1="0" x2="-24" y2={actH} />
-                          <line x1="-32" y1="0" x2="-16" y2="0" />
-                          <line x1="-32" y1={actH} x2="-16" y2={actH} />
-                          <rect x="-36" y={actH/2 - 28} width="24" height="56" rx="12" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" />
-                          <text x="-24" y={actH/2} transform={`rotate(-90 -24 ${actH/2})`} fill="#0f172a" fontSize="14" fontWeight="900" textAnchor="middle" dominantBaseline="central" stroke="none" style={{ pointerEvents: 'none' }}>
-                            {actH}
-                          </text>
+                          {hasY && (
+                            <>
+                              <line x1="-24" y1="0" x2="-24" y2={actH} />
+                              <line x1="-32" y1="0" x2="-16" y2="0" />
+                              <line x1="-32" y1={actH} x2="-16" y2={actH} />
+                              <rect x="-36" y={actH/2 - 28} width="24" height="56" rx="12" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" />
+                              <text x="-24" y={actH/2} transform={`rotate(-90 -24 ${actH/2})`} fill="#0f172a" fontSize="14" fontWeight="900" textAnchor="middle" dominantBaseline="central" stroke="none" style={{ pointerEvents: 'none' }}>
+                                {actH}
+                              </text>
+                            </>
+                          )}
                         </g>
 
                         <g fill="#1e293b" stroke="#0f172a" strokeWidth="1">
-                          {[{x: 0, y: 0}, {x: actW - CORNER_SIZE, y: 0}, {x: 0, y: actH - CORNER_SIZE}, {x: actW - CORNER_SIZE, y: actH - CORNER_SIZE}].map((pos, i) => (
+                          {corners2D.map((pos, i) => (
                             <g key={`corner-${i}`}><rect x={pos.x} y={pos.y} width={CORNER_SIZE} height={CORNER_SIZE} /><text x={pos.x+7.5} y={pos.y+7.5} fill="white" fontSize="8" fontWeight="bold" textAnchor="middle" dominantBaseline="central">C</text></g>
                           ))}
                         </g>
 
-                        {renderTrussEdge(box.id, box.plan.top.pieces, CORNER_SIZE, 0, true, 'top')}
-                        {renderTrussEdge(box.id, box.plan.bottom.pieces, CORNER_SIZE, actH - CORNER_SIZE, true, 'bottom')}
-                        {renderTrussEdge(box.id, box.plan.left.pieces, 0, CORNER_SIZE, false, 'left')}
-                        {renderTrussEdge(box.id, box.plan.right.pieces, actW - CORNER_SIZE, CORNER_SIZE, false, 'right')}
+                        {hasX && renderTrussEdge(box.id, box.plan.top.pieces, CORNER_SIZE, 0, true, 'top')}
+                        {hasX && hasY && renderTrussEdge(box.id, box.plan.bottom.pieces, CORNER_SIZE, actH - CORNER_SIZE, true, 'bottom')}
+                        {hasY && renderTrussEdge(box.id, box.plan.left.pieces, 0, CORNER_SIZE, false, 'left')}
+                        {hasX && hasY && renderTrussEdge(box.id, box.plan.right.pieces, actW - CORNER_SIZE, CORNER_SIZE, false, 'right')}
                         
-                        <text x={actW/2} y={actH/2} fill="#cbd5e1" fontSize="24" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>{box.name}</text>
-                        {actualAlt > 0 && <text x={actW/2} y={actH/2 + 25} fill="#94a3b8" fontSize="14" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>H: {actualAlt} cm</text>}
+                        <text x={actW/2} y={hasY ? actH/2 : -10} fill="#cbd5e1" fontSize="24" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>{box.name}</text>
+                        {hasZ && <text x={actW/2} y={hasY ? actH/2 + 25 : 25} fill="#94a3b8" fontSize="14" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>H: {actualAlt} cm</text>}
                       </g>
                     );
                   })}
@@ -1357,17 +1522,13 @@ export default function App() {
 
           </div>
 
-          {/* PAINEL BOM: Deslizante em Mobile, Estático em Desktop */}
           {!isExportingPDF && (
             <div className={`bg-white border-t border-slate-200 shadow-[0_-15px_40px_rgba(0,0,0,0.2)] md:shadow-none z-40 w-full absolute md:relative bottom-0 left-0 transition-transform duration-300 ease-in-out flex flex-col max-h-[85vh] md:max-h-[35vh] shrink-0 ${mobilePanel === 'bom' ? 'translate-y-0' : 'translate-y-full md:translate-y-0'}`}>
-              
-              {/* Cabeçalho Mobile */}
               <div className="md:hidden flex justify-between items-center p-4 bg-slate-900 text-white shrink-0 shadow-md z-10 relative">
                 <h3 className="font-bold text-sm uppercase tracking-wider flex items-center gap-2"><Layers size={18} /> Lista de Materiais</h3>
                 <button onClick={() => setMobilePanel('none')} className="p-1.5 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><X size={18}/></button>
               </div>
 
-              {/* Cabeçalho Desktop */}
               <div className="hidden md:flex p-3 bg-slate-50 border-b border-slate-200 justify-between items-center shrink-0">
                 <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wide">Lista de Materiais</h3>
                 <div className="flex gap-2">
@@ -1396,7 +1557,6 @@ export default function App() {
             </div>
           )}
 
-          {/* TABELA DE BOM EXCLUSIVA PARA O PDF (SÓ VISÍVEL AO EXPORTAR) */}
           {isExportingPDF && (
             <div className="p-10 pt-4 bg-white w-full max-w-5xl mx-auto">
               <h3 className="text-2xl font-bold text-slate-800 mb-4 border-b-2 border-slate-200 pb-2">Resumo e Lista de Materiais</h3>
@@ -1424,7 +1584,6 @@ export default function App() {
 
         </main>
 
-        {/* CORTINA ESCURA (BACKDROP) QUANDO OS PAINÉIS MOBILE ESTÃO ABERTOS */}
         {!isExportingPDF && mobilePanel !== 'none' && (
           <div 
             className="md:hidden absolute inset-0 bg-slate-900/40 backdrop-blur-sm z-30 transition-opacity" 
@@ -1434,7 +1593,6 @@ export default function App() {
         )}
       </div>
 
-      {/* BARRA DE NAVEGAÇÃO INFERIOR EXCLUSIVA DO MOBILE */}
       {!isExportingPDF && (
         <div className="md:hidden flex bg-white border-t border-slate-200 z-50 shrink-0 relative shadow-[0_-5px_20px_rgba(0,0,0,0.1)] pb-4">
           <button 
