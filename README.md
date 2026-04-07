@@ -1,5 +1,8 @@
 TrussPlanner
 
+## Para acesso
+https://truss-planner-wwal.vercel.app
+
 Planeamento Avançado de Estruturas Box Truss para Eventos
 
 O TrussPlanner Pro é uma aplicação web intuitiva e poderosa, desenvolvida em React, focada no design, cálculo e visualização de estruturas metálicas (Box Truss) utilizadas em eventos, feiras, palcos e espetáculos.
