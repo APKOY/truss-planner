@@ -1,5 +1,3 @@
-## Para acesso
-https://truss-planner-wwal.vercel.app/
 
 # React + Vite
 
