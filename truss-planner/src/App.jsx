@@ -3,7 +3,7 @@ import {
   Settings, ZoomIn, ZoomOut, RefreshCw, CheckCircle2, 
   Layers, Maximize, Printer, Save, FolderOpen, Cuboid, 
   MousePointerClick, X, Split, Trash2, Plus, Move, Wrench,
-  Undo2, Scissors, Copy, Magnet, MonitorPlay
+  Undo2, Scissors, Copy, Magnet, MonitorPlay, Eye
 } from 'lucide-react';
 
 // --- CONFIGURAÇÕES E ALGORITMO ---
@@ -104,7 +104,6 @@ const generatePlan = (w, h, alt, activePiecesMap) => {
   };
 };
 
-// Algoritmo de extração de peças corrigido para não duplicar material em estruturas planas
 const getBoxParts = (box) => {
   const parts = { edges: [], totalCorners: 0 };
   if (!box.plan) return parts;
@@ -117,13 +116,11 @@ const getBoxParts = (box) => {
 
   const add = (arr) => { if (arr && arr.length > 0) parts.edges.push(arr); };
 
-  // 1. Contagem correta de Cantos
   let corners = 0;
   if (hasX && hasY && hasZ) corners = 8;
   else if ((hasX && hasZ) || (hasY && hasZ) || (hasX && hasY)) corners = 4;
   else if (hasX || hasY || hasZ) corners = 2;
 
-  // 2. Extração das Arestas exatas
   if (hasX) {
     if (hasY) {
       add(box.plan.top.pieces); 
@@ -132,7 +129,7 @@ const getBoxParts = (box) => {
         add(box.plan.top.pieces); 
         add(box.plan.bottom.pieces); 
       }
-    } else { // Pórtico X (Y=0) -> Apenas um Box!
+    } else {
       add(box.plan.top.pieces); 
       if (hasZ) add(box.plan.bottom.pieces); 
     }
@@ -146,7 +143,7 @@ const getBoxParts = (box) => {
         add(box.plan.left.pieces); 
         add(box.plan.right.pieces); 
       }
-    } else { // Pórtico Y (X=0)
+    } else {
       add(box.plan.left.pieces); 
       if (hasZ) add(box.plan.left.pieces); 
     }
@@ -159,13 +156,12 @@ const getBoxParts = (box) => {
       add(box.plan.pillarFL.pieces);
       add(box.plan.pillarFR.pieces);
     } else if (hasX && !hasY) {
-      add(box.plan.pillarBR.pieces); // Pórtico X usa apenas pilar direito
+      add(box.plan.pillarBR.pieces); 
     } else if (hasY && !hasX) {
-      add(box.plan.pillarFL.pieces); // Pórtico Y usa apenas pilar da frente
+      add(box.plan.pillarFL.pieces); 
     }
   }
 
-  // 3. Pilares Intermediários
   if (hasX && box.plan.intermediatePillarsX) {
     const N = box.plan.intermediatePillarsX.length;
     if (hasY && hasZ) {
@@ -204,19 +200,6 @@ const getBoxParts = (box) => {
 
   parts.totalCorners = corners;
   return parts;
-};
-
-const calcularFerragens = (boxes, parafusosPorConexao = 4) => {
-  let totalLigacoes = 0;
-  boxes.forEach(box => {
-    const parts = getBoxParts(box);
-    parts.edges.forEach(edge => {
-      if (edge && edge.length > 0) {
-        totalLigacoes += (edge.length - 1) + 2; 
-      }
-    });
-  });
-  return { totalConexoes: totalLigacoes, totalParafusos: totalLigacoes * parafusosPorConexao };
 };
 
 const calculateMagneticSnap = (newX, newY, currentBoxId, boxes) => {
@@ -288,6 +271,7 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
     let isDragging = false;
     let isPanning = false;
     let previousMousePosition = { x: 0, y: 0 };
+    let previousTouchDist = 0; // Fix para zoom em mobile
 
     const THREE = window.THREE;
     container.innerHTML = ''; 
@@ -295,7 +279,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
     scene = new THREE.Scene();
     scene.background = new THREE.Color(showcaseMode ? 0x0f172a : 0xf1f5f9);
 
-    // CÁLCULO DE CENTRO 3D
     let maxAlt = CORNER_SIZE * 2; 
     boxes.forEach(box => {
       if (box.alt > 0) {
@@ -308,7 +291,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
     const centerZ = (bounds.maxY + bounds.minY) / 2;
     const centerY = maxAlt / 2; 
 
-    // Auto-Enquadramento (MaxDim agora ignora limites artificiais vazios)
     const maxDim = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, maxAlt, 200);
 
     camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 1, 20000);
@@ -482,13 +464,11 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
         });
       };
 
-      // Desenhar Cantos Superiores
       safeDrawCorner(left, topY, topZ); 
       if (hasX) safeDrawCorner(right, topY, topZ); 
       if (hasY) safeDrawCorner(left, topY, bottomZ); 
       if (hasX && hasY) safeDrawCorner(right, topY, bottomZ); 
 
-      // Desenhar Cantos Inferiores
       if (hasZ) {
         safeDrawCorner(left, bottomY, topZ);
         if (hasX) safeDrawCorner(right, bottomY, topZ);
@@ -496,19 +476,16 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
         if (hasX && hasY) safeDrawCorner(right, bottomY, bottomZ);
       }
 
-      // Desenhar Arestas (Faces Superiores)
       if (hasX) drawEdge(box.plan.top.pieces, left + CORNER_SIZE/2, topY, topZ, 'x');
       if (hasX && hasY) drawEdge(box.plan.bottom.pieces, left + CORNER_SIZE/2, topY, bottomZ, 'x');
       if (hasY) drawEdge(box.plan.left.pieces, left, topY, topZ + CORNER_SIZE/2, 'z');
       if (hasX && hasY) drawEdge(box.plan.right.pieces, right, topY, topZ + CORNER_SIZE/2, 'z');
 
-      // Desenhar Arestas (Faces Inferiores no chão)
       if (hasZ && hasX) drawEdge(box.plan.bottom?.pieces || [], left + CORNER_SIZE/2, bottomY, topZ, 'x');
       if (hasZ && hasX && hasY) drawEdge(box.plan.bottom?.pieces || [], left + CORNER_SIZE/2, bottomY, bottomZ, 'x');
       if (hasZ && hasY) drawEdge(box.plan.left?.pieces || [], left, bottomY, topZ + CORNER_SIZE/2, 'z');
       if (hasZ && hasX && hasY) drawEdge(box.plan.right?.pieces || [], right, bottomY, topZ + CORNER_SIZE/2, 'z');
 
-      // Desenhar Pilares
       if (hasZ) {
         drawEdge(box.plan.pillarBL.pieces, left, CORNER_SIZE, topZ, 'y');
         if (hasX) drawEdge(box.plan.pillarBR.pieces, right, CORNER_SIZE, topZ, 'y');
@@ -516,7 +493,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
         if (hasX && hasY) drawEdge(box.plan.pillarFR.pieces, right, CORNER_SIZE, bottomZ, 'y');
       }
 
-      // Suportes Intermediários X
       if (hasX && box.plan.intermediatePillarsX) {
         box.plan.intermediatePillarsX.forEach(xPos => {
           const absX = relX + (CORNER_SIZE / 2) + xPos; 
@@ -533,7 +509,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
         });
       }
 
-      // Suportes Intermediários Y
       if (hasY && box.plan.intermediatePillarsY) {
         box.plan.intermediatePillarsY.forEach(yPos => {
           const absZ = relZ + (CORNER_SIZE / 2) + yPos;
@@ -550,7 +525,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
         });
       }
 
-      // Rótulos 3D de Medidas
       if (hasX) {
         const labelX = createTextSprite(`${actW} cm`);
         labelX.position.set((left + right) / 2, bottomY - 15, bottomZ + 30);
@@ -595,11 +569,18 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
       camera.translateZ(Math.sign(e.deltaY) * 50);
     }, { passive: false });
 
+    // Correção Touch Eventos em Mobile (Rotação e Zoom/Pinça)
     container.addEventListener('touchstart', (e) => {
       e.preventDefault();
       if (e.touches.length === 1) {
         isDragging = true;
         previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      } else if (e.touches.length === 2) {
+        isDragging = false;
+        previousTouchDist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX, 
+          e.touches[0].clientY - e.touches[1].clientY
+        );
       }
     }, { passive: false });
     
@@ -610,10 +591,23 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
         const deltaY = e.touches[0].clientY - previousMousePosition.y;
         handleCameraMove(deltaX, deltaY);
         previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      } else if (e.touches.length === 2) {
+        const dist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX, 
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        if (previousTouchDist > 0) {
+          const delta = previousTouchDist - dist;
+          camera.translateZ(delta * 2.5); // Sensibilidade ajustada
+        }
+        previousTouchDist = dist;
       }
     }, { passive: false });
 
-    container.addEventListener('touchend', () => { isDragging = false; });
+    container.addEventListener('touchend', () => { 
+      isDragging = false; 
+      previousTouchDist = 0;
+    });
 
     const gridColor = showcaseMode ? 0x334155 : 0x94a3b8;
     const gridBase = showcaseMode ? 0x1e293b : 0xe2e8f0;
@@ -623,7 +617,7 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
 
     const animate = () => { 
       animationId = requestAnimationFrame(animate); 
-      if (showcaseMode && !isDragging && !isPanning) {
+      if (showcaseMode && !isDragging && !isPanning && previousTouchDist === 0) {
         trussGroup.rotation.y += 0.003;
       }
       renderer.render(scene, camera); 
@@ -686,7 +680,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
   );
 };
 
-
 // --- COMPONENTE PRINCIPAL ---
 export default function App() {
   const [activePieces, setActivePieces] = useState(
@@ -695,6 +688,8 @@ export default function App() {
 
   const [screwsPerConn, setScrewsPerConn] = useState(4);
   const [pastHistory, setPastHistory] = useState([]); 
+  const [errorMsg, setErrorMsg] = useState('');
+  const [viewMode, setViewMode] = useState('top'); // 'top' ou 'front'
   
   const [boxes, setBoxes] = useState(() => {
     const initPieces = DEFAULT_PIECES.reduce((acc, p) => ({ ...acc, [p]: true }), {});
@@ -741,7 +736,7 @@ export default function App() {
     activePiecesRef.current = activePieces;
   }, [boxes, activeBoxId, activePieces]);
 
-  // CÁLCULO DAS BOUNDS CORRIGIDO (Otimizado para abraçar precisamente as caixas reais)
+  // CÁLCULO DE LIMITES ATUALIZADO BASEADO NA VIEWMODE (Visão de topo vs Frontal)
   const bounds = useMemo(() => {
     if (boxes.length === 0) return { minX: 0, minY: 0, maxX: 800, maxY: 600 };
     
@@ -749,12 +744,16 @@ export default function App() {
     
     boxes.forEach(b => {
        const actW = (b.w > 0) ? (b.plan?.top?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
-       const actH = (b.h > 0) ? (b.plan?.left?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
+       
+       const renderW = actW;
+       const renderH = viewMode === 'top' 
+          ? ((b.h > 0) ? (b.plan?.left?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE)
+          : ((b.alt > 0) ? (b.plan?.pillarFL?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE);
        
        minX = Math.min(minX, b.x);
        minY = Math.min(minY, b.y);
-       maxX = Math.max(maxX, b.x + actW);
-       maxY = Math.max(maxY, b.y + actH);
+       maxX = Math.max(maxX, b.x + renderW);
+       maxY = Math.max(maxY, b.y + renderH);
     });
     
     return { 
@@ -763,9 +762,8 @@ export default function App() {
       maxX: maxX + 50, 
       maxY: maxY + 50 
     };
-  }, [boxes]);
+  }, [boxes, viewMode]);
 
-  // FUNÇÃO: CENTRALIZAR VISTA 2D (Auto-Enquadramento CAD)
   const centerView = useCallback(() => {
     if (!container2DRef.current) return;
     const { clientWidth, clientHeight } = container2DRef.current;
@@ -794,9 +792,9 @@ export default function App() {
   }, [bounds]);
 
   useEffect(() => {
-    const t = setTimeout(() => centerView(), 100);
+    const t = setTimeout(() => centerView(), 50);
     return () => clearTimeout(t);
-  }, []); 
+  }, [viewMode, centerView]);
 
   const recordHistory = useCallback(() => {
     setPastHistory(prev => {
@@ -987,7 +985,8 @@ export default function App() {
         await window.html2pdf().set(opt).from(element).save();
       } catch (error) {
         console.error('Erro ao exportar PDF:', error);
-        alert('Não foi possível gerar o ficheiro PDF. Tente novamente.');
+        setErrorMsg('Não foi possível gerar o ficheiro PDF. Tente novamente.');
+        setTimeout(() => setErrorMsg(''), 5000);
       } finally {
         setIsExportingPDF(false);
       }
@@ -1172,6 +1171,13 @@ export default function App() {
   return (
     <div className="flex flex-col h-[100dvh] bg-slate-50 font-sans text-slate-900 overflow-hidden print:bg-white print:h-auto" onClick={() => setEditingPiece(null)}>
       
+      {errorMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-red-500 text-white px-4 py-2 rounded-lg shadow-xl flex items-center gap-3 animate-in slide-in-from-top-2">
+           <span className="text-sm font-medium">{errorMsg}</span>
+           <button onClick={() => setErrorMsg('')} className="hover:bg-red-600 p-1 rounded-md transition-colors"><X size={16}/></button>
+        </div>
+      )}
+
       {(show3D || showcaseMode) && (
         <ThreeDViewer 
           boxes={boxes} 
@@ -1374,7 +1380,7 @@ export default function App() {
             </div>
           )}
 
-          <div ref={container2DRef} className={`flex-1 relative touch-none select-none ${isExportingPDF ? 'bg-white overflow-visible' : 'overflow-hidden'}`} style={{
+          <div ref={container2DRef} className={`flex-1 relative touch-none select-none ${isExportingPDF ? 'bg-white overflow-visible w-full flex justify-center' : 'overflow-hidden'}`} style={{
                 backgroundSize: '40px 40px',
                 backgroundImage: isExportingPDF ? 'none' : 'linear-gradient(to right, #f1f5f9 1px, transparent 1px), linear-gradient(to bottom, #f1f5f9 1px, transparent 1px)'
               }}
@@ -1396,11 +1402,17 @@ export default function App() {
               </div>
             )}
 
-            <div className={`w-full h-full pointer-events-none relative ${isExportingPDF ? 'flex justify-center items-start py-10' : ''}`}>
+            <div className={`w-full h-full pointer-events-none relative ${isExportingPDF ? 'flex justify-center items-start py-6' : ''}`}>
               <div style={{ transform: isExportingPDF ? 'none' : `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: '0 0' }} 
                    className={isExportingPDF ? 'w-full flex justify-center' : 'pointer-events-auto absolute top-0 left-0 min-w-[5000px] min-h-[5000px]'}>
                 
-                <svg ref={svgRef} width={isExportingPDF ? Math.max(800, bounds.maxX + 50) : "5000px"} height={isExportingPDF ? Math.max(600, bounds.maxY + 50) : "5000px"} className={isExportingPDF ? 'overflow-visible' : 'drop-shadow-xl overflow-visible'}>
+                {/* SVG CORRIGIDO PARA EXPORTAÇÃO PDF: Usa viewBox dinâmica baseada nos bounds se isExportingPDF for true */}
+                <svg ref={svgRef} 
+                  width={isExportingPDF ? bounds.maxX - bounds.minX + 100 : "5000px"} 
+                  height={isExportingPDF ? bounds.maxY - bounds.minY + 100 : "5000px"} 
+                  viewBox={isExportingPDF ? `${bounds.minX - 50} ${bounds.minY - 50} ${bounds.maxX - bounds.minX + 100} ${bounds.maxY - bounds.minY + 100}` : undefined}
+                  className={isExportingPDF ? 'overflow-visible' : 'drop-shadow-xl overflow-visible'}>
+                  
                   {boxes.map(box => {
                     if (!box.plan) return null;
                     
@@ -1414,34 +1426,46 @@ export default function App() {
                     const actH = hasY ? (box.plan.left?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
                     const actualAlt = hasZ ? (box.plan.pillarFL?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
                     
+                    // Ajuste de largura/altura visual com base no modo (Planta ou Elevação)
+                    const renderW = actW;
+                    const renderH = viewMode === 'top' ? actH : actualAlt;
+
                     const isSelected = box.id === activeBoxId && !isExportingPDF;
                     const isBeingDragged = draggingBoxId === box.id && !isExportingPDF;
 
+                    // Definição geométrica dos cantos com base na visão atual
                     const corners2D = [];
                     corners2D.push({x: 0, y: 0});
-                    if (hasX) corners2D.push({x: actW - CORNER_SIZE, y: 0});
-                    if (hasY) corners2D.push({x: 0, y: actH - CORNER_SIZE});
-                    if (hasX && hasY) corners2D.push({x: actW - CORNER_SIZE, y: actH - CORNER_SIZE});
+                    if (hasX) corners2D.push({x: renderW - CORNER_SIZE, y: 0});
+                    
+                    if (viewMode === 'top') {
+                      if (hasY) corners2D.push({x: 0, y: renderH - CORNER_SIZE});
+                      if (hasX && hasY) corners2D.push({x: renderW - CORNER_SIZE, y: renderH - CORNER_SIZE});
+                    } else { // Frontal
+                      if (hasZ) corners2D.push({x: 0, y: renderH - CORNER_SIZE});
+                      if (hasX && hasZ) corners2D.push({x: renderW - CORNER_SIZE, y: renderH - CORNER_SIZE});
+                    }
 
                     return (
                       <g key={box.id} transform={`translate(${box.x}, ${box.y})`}>
-                        <rect x="-20" y="-20" width={actW+40} height={actH+40} 
+                        <rect x="-20" y="-20" width={renderW+40} height={renderH+40} 
                               fill={isSelected ? (isBeingDragged ? "rgba(59, 130, 246, 0.15)" : "rgba(59, 130, 246, 0.05)") : "transparent"} 
                               stroke={isSelected ? "#3b82f6" : "transparent"} strokeWidth="2" strokeDasharray="5,5" rx="8"
                               onMouseDown={isExportingPDF ? null : (e) => handleBoxMouseDown(e, box.id)}
                               onTouchStart={isExportingPDF ? null : (e) => handleBoxTouchStart(e, box.id)} 
                               className={isExportingPDF ? '' : 'cursor-move'} />
 
-                        {hasZ && hasX && box.plan.intermediatePillarsX?.map((xPos, idx) => {
+                        {/* Pilares Intermediários - Visão Topo */}
+                        {viewMode === 'top' && hasZ && hasX && box.plan.intermediatePillarsX?.map((xPos, idx) => {
                           const lineX = CORNER_SIZE + xPos;
                           return (
                             <g key={`int-x-${idx}`} style={{ pointerEvents: 'none' }}>
                               {hasY ? (
                                 <>
-                                  <rect x={lineX - 6} y={CORNER_SIZE} width="12" height={actH - CORNER_SIZE*2} fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
-                                  <line x1={lineX} y1={CORNER_SIZE} x2={lineX} y2={actH - CORNER_SIZE} stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="4,4" />
-                                  <rect x={lineX - 22} y={actH / 2 - 10} width="44" height="20" rx="4" fill="#ffffff" stroke="#94a3b8" strokeWidth="1" />
-                                  <text x={lineX} y={actH / 2} fill="#334155" fontSize="7" fontWeight="800" textAnchor="middle" dominantBaseline="central">SUPORTE</text>
+                                  <rect x={lineX - 6} y={CORNER_SIZE} width="12" height={renderH - CORNER_SIZE*2} fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
+                                  <line x1={lineX} y1={CORNER_SIZE} x2={lineX} y2={renderH - CORNER_SIZE} stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="4,4" />
+                                  <rect x={lineX - 22} y={renderH / 2 - 10} width="44" height="20" rx="4" fill="#ffffff" stroke="#94a3b8" strokeWidth="1" />
+                                  <text x={lineX} y={renderH / 2} fill="#334155" fontSize="7" fontWeight="800" textAnchor="middle" dominantBaseline="central">SUPORTE</text>
                                 </>
                               ) : (
                                 <>
@@ -1453,16 +1477,16 @@ export default function App() {
                           );
                         })}
 
-                        {hasZ && hasY && box.plan.intermediatePillarsY?.map((yPos, idx) => {
+                        {viewMode === 'top' && hasZ && hasY && box.plan.intermediatePillarsY?.map((yPos, idx) => {
                           const lineY = CORNER_SIZE + yPos;
                           return (
                             <g key={`int-y-${idx}`} style={{ pointerEvents: 'none' }}>
                               {hasX ? (
                                 <>
-                                  <rect x={CORNER_SIZE} y={lineY - 6} width={actW - CORNER_SIZE*2} height="12" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
-                                  <line x1={CORNER_SIZE} y1={lineY} x2={actW - CORNER_SIZE} y2={lineY} stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="4,4" />
-                                  <rect x={actW / 2 - 22} y={lineY - 10} width="44" height="20" rx="4" fill="#ffffff" stroke="#94a3b8" strokeWidth="1" />
-                                  <text x={actW / 2} y={lineY} fill="#334155" fontSize="7" fontWeight="800" textAnchor="middle" dominantBaseline="central">SUPORTE</text>
+                                  <rect x={CORNER_SIZE} y={lineY - 6} width={renderW - CORNER_SIZE*2} height="12" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
+                                  <line x1={CORNER_SIZE} y1={lineY} x2={renderW - CORNER_SIZE} y2={lineY} stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="4,4" />
+                                  <rect x={renderW / 2 - 22} y={lineY - 10} width="44" height="20" rx="4" fill="#ffffff" stroke="#94a3b8" strokeWidth="1" />
+                                  <text x={renderW / 2} y={lineY} fill="#334155" fontSize="7" fontWeight="800" textAnchor="middle" dominantBaseline="central">SUPORTE</text>
                                 </>
                               ) : (
                                 <>
@@ -1474,45 +1498,74 @@ export default function App() {
                           );
                         })}
 
+                        {/* Linhas Guias de Dimensão */}
                         <g stroke="#94a3b8" strokeWidth="1.5" vectorEffect="non-scaling-stroke">
                           {hasX && (
                             <>
-                              <line x1="0" y1="-24" x2={actW} y2="-24" />
+                              <line x1="0" y1="-24" x2={renderW} y2="-24" />
                               <line x1="0" y1="-32" x2="0" y2="-16" />
-                              <line x1={actW} y1="-32" x2={actW} y2="-16" />
-                              <rect x={actW/2 - 28} y="-36" width="56" height="24" rx="12" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" />
-                              <text x={actW/2} y="-24" fill="#0f172a" fontSize="14" fontWeight="900" textAnchor="middle" dominantBaseline="central" stroke="none" style={{ pointerEvents: 'none' }}>
-                                {actW}
+                              <line x1={renderW} y1="-32" x2={renderW} y2="-16" />
+                              <rect x={renderW/2 - 28} y="-36" width="56" height="24" rx="12" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" />
+                              <text x={renderW/2} y="-24" fill="#0f172a" fontSize="14" fontWeight="900" textAnchor="middle" dominantBaseline="central" stroke="none" style={{ pointerEvents: 'none' }}>
+                                {renderW}
                               </text>
                             </>
                           )}
 
-                          {hasY && (
+                          {(viewMode === 'top' ? hasY : hasZ) && (
                             <>
-                              <line x1="-24" y1="0" x2="-24" y2={actH} />
+                              <line x1="-24" y1="0" x2="-24" y2={renderH} />
                               <line x1="-32" y1="0" x2="-16" y2="0" />
-                              <line x1="-32" y1={actH} x2="-16" y2={actH} />
-                              <rect x="-36" y={actH/2 - 28} width="24" height="56" rx="12" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" />
-                              <text x="-24" y={actH/2} transform={`rotate(-90 -24 ${actH/2})`} fill="#0f172a" fontSize="14" fontWeight="900" textAnchor="middle" dominantBaseline="central" stroke="none" style={{ pointerEvents: 'none' }}>
-                                {actH}
+                              <line x1="-32" y1={renderH} x2="-16" y2={renderH} />
+                              <rect x="-36" y={renderH/2 - 28} width="24" height="56" rx="12" fill="#ffffff" stroke="#94a3b8" strokeWidth="1.5" />
+                              <text x="-24" y={renderH/2} transform={`rotate(-90 -24 ${renderH/2})`} fill="#0f172a" fontSize="14" fontWeight="900" textAnchor="middle" dominantBaseline="central" stroke="none" style={{ pointerEvents: 'none' }}>
+                                {renderH}
                               </text>
                             </>
                           )}
                         </g>
 
+                        {/* Desenhar Peças 2D baseadas na Visão */}
                         <g fill="#1e293b" stroke="#0f172a" strokeWidth="1">
                           {corners2D.map((pos, i) => (
                             <g key={`corner-${i}`}><rect x={pos.x} y={pos.y} width={CORNER_SIZE} height={CORNER_SIZE} /><text x={pos.x+7.5} y={pos.y+7.5} fill="white" fontSize="8" fontWeight="bold" textAnchor="middle" dominantBaseline="central">C</text></g>
                           ))}
                         </g>
 
-                        {hasX && renderTrussEdge(box.id, box.plan.top.pieces, CORNER_SIZE, 0, true, 'top')}
-                        {hasX && hasY && renderTrussEdge(box.id, box.plan.bottom.pieces, CORNER_SIZE, actH - CORNER_SIZE, true, 'bottom')}
-                        {hasY && renderTrussEdge(box.id, box.plan.left.pieces, 0, CORNER_SIZE, false, 'left')}
-                        {hasX && hasY && renderTrussEdge(box.id, box.plan.right.pieces, actW - CORNER_SIZE, CORNER_SIZE, false, 'right')}
+                        {viewMode === 'top' ? (
+                          <>
+                            {hasX && renderTrussEdge(box.id, box.plan.top.pieces, CORNER_SIZE, 0, true, 'top')}
+                            {hasX && hasY && renderTrussEdge(box.id, box.plan.bottom.pieces, CORNER_SIZE, renderH - CORNER_SIZE, true, 'bottom')}
+                            {hasY && renderTrussEdge(box.id, box.plan.left.pieces, 0, CORNER_SIZE, false, 'left')}
+                            {hasX && hasY && renderTrussEdge(box.id, box.plan.right.pieces, renderW - CORNER_SIZE, CORNER_SIZE, false, 'right')}
+                          </>
+                        ) : (
+                          <>
+                            {/* Renderização Visão Frontal (Elevação) */}
+                            {hasX && renderTrussEdge(box.id, box.plan.top.pieces, CORNER_SIZE, 0, true, 'top')}
+                            {hasX && hasZ && renderTrussEdge(box.id, box.plan.bottom?.pieces || [], CORNER_SIZE, renderH - CORNER_SIZE, true, 'bottom')}
+                            {hasZ && renderTrussEdge(box.id, box.plan.pillarFL.pieces, 0, CORNER_SIZE, false, 'pillarFL')}
+                            {hasX && hasZ && renderTrussEdge(box.id, box.plan.pillarFR.pieces, renderW - CORNER_SIZE, CORNER_SIZE, false, 'pillarFR')}
+                            
+                            {/* Pilares intermediários desenhados fisicamente na visão Frontal */}
+                            {hasZ && hasX && box.plan.intermediatePillarsX?.map((xPos, idx) => {
+                               const lineX = CORNER_SIZE + xPos;
+                               return (
+                                 <g key={`front-int-x-${idx}`}>
+                                   {renderTrussEdge(box.id, box.plan.pillarFL?.pieces || [], lineX, CORNER_SIZE, false, `int-x-${idx}`)}
+                                   <rect x={lineX} y={0} width={CORNER_SIZE} height={CORNER_SIZE} fill="#1e293b" stroke="#0f172a" strokeWidth="1" />
+                                   <text x={lineX+7.5} y={7.5} fill="white" fontSize="8" fontWeight="bold" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: 'none' }}>C</text>
+                                   <rect x={lineX} y={renderH - CORNER_SIZE} width={CORNER_SIZE} height={CORNER_SIZE} fill="#1e293b" stroke="#0f172a" strokeWidth="1" />
+                                   <text x={lineX+7.5} y={renderH-CORNER_SIZE+7.5} fill="white" fontSize="8" fontWeight="bold" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: 'none' }}>C</text>
+                                 </g>
+                               );
+                            })}
+                          </>
+                        )}
                         
-                        <text x={actW/2} y={hasY ? actH/2 : -10} fill="#cbd5e1" fontSize="24" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>{box.name}</text>
-                        {hasZ && <text x={actW/2} y={hasY ? actH/2 + 25 : 25} fill="#94a3b8" fontSize="14" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>H: {actualAlt} cm</text>}
+                        <text x={renderW/2} y={renderH/2} fill="#cbd5e1" fontSize="24" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>{box.name}</text>
+                        {viewMode === 'top' && hasZ && <text x={renderW/2} y={renderH/2 + 25} fill="#94a3b8" fontSize="14" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>H: {actualAlt} cm</text>}
+                        {viewMode === 'front' && hasY && <text x={renderW/2} y={renderH/2 + 25} fill="#94a3b8" fontSize="14" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>Prof: {actH} cm</text>}
                       </g>
                     );
                   })}
@@ -1520,6 +1573,24 @@ export default function App() {
               </div>
             </div>
 
+            {/* Alternador de Visão 2D */}
+            {!isExportingPDF && (
+              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 md:bottom-8 z-30 flex bg-white/90 backdrop-blur shadow-xl border border-slate-200 rounded-full p-1 animate-in slide-in-from-bottom-5">
+                <button 
+                  onClick={() => setViewMode('top')} 
+                  className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold transition-all ${viewMode === 'top' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}
+                >
+                  <Layers size={16} /> <span className="hidden sm:inline">Planta</span> (Topo)
+                </button>
+                <button 
+                  onClick={() => setViewMode('front')} 
+                  className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold transition-all ${viewMode === 'front' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}
+                >
+                  <Eye size={16} /> <span className="hidden sm:inline">Elevação</span> (Frente)
+                </button>
+              </div>
+            )}
+            
           </div>
 
           {!isExportingPDF && (
