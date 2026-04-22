@@ -1,3 +1,4 @@
+/* global __firebase_config, __app_id, __initial_auth_token */
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   Settings, ZoomIn, ZoomOut, RefreshCw, CheckCircle2, 
@@ -903,10 +904,16 @@ export default function App() {
     setPan({ x: newPanX, y: newPanY });
   }, [bounds]);
 
+  const centerViewRef = useRef(centerView);
   useEffect(() => {
-    const t = setTimeout(() => centerView(), 150);
+    centerViewRef.current = centerView;
+  }, [centerView]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (centerViewRef.current) centerViewRef.current();
+    }, 150);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode]); 
 
   const recordHistory = useCallback(() => {
@@ -1113,7 +1120,7 @@ export default function App() {
       window.removeEventListener('mouseup', handleGlobalUp);
       window.removeEventListener('touchend', handleGlobalUp);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); 
 
   const addBox = () => {
     recordHistory();
