@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { 
   Settings, ZoomIn, ZoomOut, RefreshCw, CheckCircle2, 
   Layers, Maximize, Printer, Save, FolderOpen, Cuboid, 
-  MousePointerClick, X, Split, Trash2, Plus, Move, Wrench,
+  MousePointerClick, X, Split, Trash2, Plus, Wrench,
   Undo2, Scissors, Copy, Magnet, MonitorPlay, Eye,
   Cloud, CloudUpload, ArrowLeft, ArrowRight
 } from 'lucide-react';
@@ -969,6 +969,33 @@ export default function App() {
     });
   }, [recordHistory]);
 
+  const handleRotatePiece = useCallback(() => {
+    if (!editingPieceRef.current) return;
+    recordHistory();
+    const piece = editingPieceRef.current;
+    if (piece.type === 'box') {
+       const { boxId, edgeId, index, length, x, y, isVertical } = piece;
+       const newId = generateId();
+       const newFreePiece = {
+          id: newId,
+          length: length,
+          x: (x - panRef.current.x) / scaleRef.current - (isVertical ? CORNER_SIZE/2 : length/2),
+          y: (y - panRef.current.y) / scaleRef.current - (isVertical ? length/2 : CORNER_SIZE/2),
+          isVertical: !isVertical
+       };
+       setFreePieces(prev => [...prev, newFreePiece]);
+       setBoxes(prev => prev.map(box => {
+          if (box.id !== boxId) return box;
+          const newPlan = JSON.parse(JSON.stringify(box.plan));
+          newPlan[edgeId].pieces.splice(index, 1);
+          return { ...box, plan: newPlan, isManual: true };
+       }));
+    } else {
+       setFreePieces(prev => prev.map(fp => fp.id === piece.id ? { ...fp, isVertical: !fp.isVertical } : fp));
+    }
+    setEditingPiece(null);
+  }, [recordHistory]);
+
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -987,35 +1014,13 @@ export default function App() {
           draggingFreePieceRef.current = { ...dfp, ...newOffset };
         } else if (editingPieceRef.current) {
           e.preventDefault();
-          recordHistory();
-          const piece = editingPieceRef.current;
-          if (piece.type === 'box') {
-             const { boxId, edgeId, index, length, x, y, isVertical } = piece;
-             const newId = generateId();
-             const newFreePiece = {
-                id: newId,
-                length: length,
-                x: (x - panRef.current.x) / scaleRef.current - (isVertical ? CORNER_SIZE/2 : length/2),
-                y: (y - panRef.current.y) / scaleRef.current - (isVertical ? length/2 : CORNER_SIZE/2),
-                isVertical: !isVertical
-             };
-             setFreePieces(prev => [...prev, newFreePiece]);
-             setBoxes(prev => prev.map(box => {
-                if (box.id !== boxId) return box;
-                const newPlan = JSON.parse(JSON.stringify(box.plan));
-                newPlan[edgeId].pieces.splice(index, 1);
-                return { ...box, plan: newPlan, isManual: true };
-             }));
-          } else {
-             setFreePieces(prev => prev.map(fp => fp.id === piece.id ? { ...fp, isVertical: !fp.isVertical } : fp));
-          }
-          setEditingPiece(null);
+          handleRotatePiece();
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, cutBox, duplicateBox, recordHistory]);
+  }, [handleUndo, cutBox, duplicateBox, handleRotatePiece]);
 
   // --- O NOVO EVENTO GLOBAL UP COM RECONEXÃO DE PEÇAS ---
   useEffect(() => {
@@ -1205,32 +1210,6 @@ export default function App() {
     }
     setEditingPiece(null);
   };
-
-  const handleRotatePiece = useCallback(() => {
-    if (!editingPiece) return;
-    recordHistory();
-    if (editingPiece.type === 'box') {
-       const { boxId, edgeId, index, length, x, y, isVertical } = editingPiece;
-       const newId = generateId();
-       const newFreePiece = {
-          id: newId,
-          length: length,
-          x: (x - panRef.current.x) / scaleRef.current - (isVertical ? CORNER_SIZE/2 : length/2),
-          y: (y - panRef.current.y) / scaleRef.current - (isVertical ? length/2 : CORNER_SIZE/2),
-          isVertical: !isVertical
-       };
-       setFreePieces(prev => [...prev, newFreePiece]);
-       setBoxes(prev => prev.map(box => {
-          if (box.id !== boxId) return box;
-          const newPlan = JSON.parse(JSON.stringify(box.plan));
-          newPlan[edgeId].pieces.splice(index, 1);
-          return { ...box, plan: newPlan, isManual: true };
-       }));
-    } else {
-       setFreePieces(prev => prev.map(fp => fp.id === editingPiece.id ? { ...fp, isVertical: !fp.isVertical } : fp));
-    }
-    setEditingPiece(null);
-  }, [editingPiece, recordHistory]);
 
   const handleMovePiece = (direction) => {
     if (!editingPiece || editingPiece.type !== 'box') return;
