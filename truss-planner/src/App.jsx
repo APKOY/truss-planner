@@ -3,15 +3,37 @@ import {
   Settings, ZoomIn, ZoomOut, RefreshCw, CheckCircle2, 
   Layers, Maximize, Printer, Save, FolderOpen, Cuboid, 
   MousePointerClick, X, Split, Trash2, Plus, Move, Wrench,
-  Undo2, Scissors, Copy, Magnet, MonitorPlay, Eye
+  Undo2, Scissors, Copy, Magnet, MonitorPlay, Eye,
+  Cloud, CloudUpload, ArrowLeft, ArrowRight
 } from 'lucide-react';
+
+// --- IMPORTS DO FIREBASE ---
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
+
+// --- CONFIGURAÇÃO FIREBASE ---
+const firebaseConfigStr = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
+const firebaseConfig = firebaseConfigStr ? JSON.parse(firebaseConfigStr) : null;
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'truss-planner-default';
+
+let app, auth, db;
+if (firebaseConfig) {
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  } catch(e) { console.error("Erro ao iniciar Firebase", e); }
+}
 
 // --- CONFIGURAÇÕES E ALGORITMO ---
 
 const CORNER_SIZE = 15;
 const DEFAULT_PIECES = [20, 50, 70, 100, 120, 150, 170, 200, 220, 250, 270, 300];
 
-const generateId = () => 'box-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+const generateId = () => 'item-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+
+const getEdgeLen = (arr) => arr ? arr.reduce((a, b) => a + b, 0) : 0;
 
 const solveTruss = (target, pieces) => {
   if (target <= 0) return { pieces: [], exact: true, actualLength: 0 };
@@ -202,6 +224,29 @@ const getBoxParts = (box) => {
   return parts;
 };
 
+const getActW = (box) => {
+   if (!box || !box.plan || box.w <= 0) return CORNER_SIZE;
+   const t = box.plan.top ? Math.max(box.plan.top.actualLength || 0, getEdgeLen(box.plan.top.pieces)) : 0;
+   const b = box.plan.bottom ? Math.max(box.plan.bottom.actualLength || 0, getEdgeLen(box.plan.bottom.pieces)) : 0;
+   return Math.max(t, b) + CORNER_SIZE*2;
+};
+
+const getActH = (box) => {
+   if (!box || !box.plan || box.h <= 0) return CORNER_SIZE;
+   const l = box.plan.left ? Math.max(box.plan.left.actualLength || 0, getEdgeLen(box.plan.left.pieces)) : 0;
+   const r = box.plan.right ? Math.max(box.plan.right.actualLength || 0, getEdgeLen(box.plan.right.pieces)) : 0;
+   return Math.max(l, r) + CORNER_SIZE*2;
+};
+
+const getActAlt = (box) => {
+   if (!box || !box.plan || box.alt <= 0) return CORNER_SIZE;
+   const fl = box.plan.pillarFL ? Math.max(box.plan.pillarFL.actualLength || 0, getEdgeLen(box.plan.pillarFL.pieces)) : 0;
+   const fr = box.plan.pillarFR ? Math.max(box.plan.pillarFR.actualLength || 0, getEdgeLen(box.plan.pillarFR.pieces)) : 0;
+   const bl = box.plan.pillarBL ? Math.max(box.plan.pillarBL.actualLength || 0, getEdgeLen(box.plan.pillarBL.pieces)) : 0;
+   const br = box.plan.pillarBR ? Math.max(box.plan.pillarBR.actualLength || 0, getEdgeLen(box.plan.pillarBR.pieces)) : 0;
+   return Math.max(fl, fr, bl, br) + CORNER_SIZE*2;
+};
+
 const calculateMagneticSnap = (newX, newY, currentBoxId, boxes) => {
   const SNAP_DIST = 15; 
   let snappedX = newX;
@@ -210,14 +255,14 @@ const calculateMagneticSnap = (newX, newY, currentBoxId, boxes) => {
   const currentBox = boxes.find(b => b.id === currentBoxId);
   if (!currentBox || !currentBox.plan) return { x: newX, y: newY };
   
-  const actW1 = currentBox.w > 0 ? (currentBox.plan.top?.actualLength || 0) + CORNER_SIZE * 2 : CORNER_SIZE;
-  const actH1 = currentBox.h > 0 ? (currentBox.plan.left?.actualLength || 0) + CORNER_SIZE * 2 : CORNER_SIZE;
+  const actW1 = currentBox.w > 0 ? getActW(currentBox) : CORNER_SIZE;
+  const actH1 = currentBox.h > 0 ? getActH(currentBox) : CORNER_SIZE;
 
   for (let targetBox of boxes) {
     if (targetBox.id === currentBoxId || !targetBox.plan) continue;
     
-    const actW2 = targetBox.w > 0 ? (targetBox.plan.top?.actualLength || 0) + CORNER_SIZE * 2 : CORNER_SIZE;
-    const actH2 = targetBox.h > 0 ? (targetBox.plan.left?.actualLength || 0) + CORNER_SIZE * 2 : CORNER_SIZE;
+    const actW2 = targetBox.w > 0 ? getActW(targetBox) : CORNER_SIZE;
+    const actH2 = targetBox.h > 0 ? getActH(targetBox) : CORNER_SIZE;
 
     const snapPointsX = [
       targetBox.x,                          
@@ -245,7 +290,7 @@ const calculateMagneticSnap = (newX, newY, currentBoxId, boxes) => {
 };
 
 // --- COMPONENTE VISUALIZADOR 3D / SHOWCASE ---
-const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectName, totalItems }) => {
+const ThreeDViewer = ({ boxes, freePieces, bounds, onClose, showcaseMode = false, projectName, totalItems }) => {
   const containerRef = useRef(null);
   const [isReady, setIsReady] = useState(!!window.THREE);
 
@@ -271,7 +316,7 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
     let isDragging = false;
     let isPanning = false;
     let previousMousePosition = { x: 0, y: 0 };
-    let previousTouchDist = 0; // Fix para zoom em mobile
+    let previousTouchDist = 0; 
 
     const THREE = window.THREE;
     container.innerHTML = ''; 
@@ -282,7 +327,7 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
     let maxAlt = CORNER_SIZE * 2; 
     boxes.forEach(box => {
       if (box.alt > 0) {
-        const h = (box.plan?.pillarFL?.actualLength || 0) + CORNER_SIZE * 2;
+        const h = getActAlt(box);
         if (h > maxAlt) maxAlt = h;
       }
     });
@@ -351,7 +396,7 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
       ctx.quadraticCurveTo(canvas.width, canvas.height, canvas.width - radius, canvas.height);
       ctx.lineTo(radius, canvas.height);
       ctx.quadraticCurveTo(0, canvas.height, 0, canvas.height - radius);
-      ctx.lineTo(0, radius); ctx.quadraticCurveTo(0, 0, radius, 0);
+      ctx.lineTo(0, canvas.height); ctx.quadraticCurveTo(0, 0, radius, 0);
       ctx.closePath();
       ctx.fill(); ctx.stroke();
 
@@ -396,6 +441,14 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
       return group.clone();
     };
 
+    const drawTruss = (x, y, z, length, axis) => {
+      const truss = getTrussGroup(length, trussMaterial);
+      if (axis === 'z') truss.rotation.y = Math.PI / 2;
+      if (axis === 'y') truss.rotation.z = Math.PI / 2; 
+      truss.position.set(x, y, z);
+      trussGroup.add(truss);
+    };
+
     let cornerCache = null;
     const getCornerGroup = (material) => {
       if (cornerCache) return cornerCache.clone();
@@ -418,9 +471,9 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
 
       if (!hasX && !hasY && !hasZ) return;
 
-      const actW = hasX ? (box.plan.top?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
-      const actH = hasY ? (box.plan.left?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
-      const actualAlt = hasZ ? (box.plan.pillarFL?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
+      const actW = getActW(box);
+      const actH = getActH(box);
+      const actualAlt = getActAlt(box);
 
       const relX = box.x - centerX;
       const relZ = box.y - centerZ;
@@ -431,14 +484,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
       const bottomZ = relZ + actH - CORNER_SIZE/2;
       const bottomY = CORNER_SIZE / 2; 
       const topY = hasZ ? actualAlt - CORNER_SIZE / 2 : bottomY;
-
-      const drawTruss = (x, y, z, length, axis) => {
-        const truss = getTrussGroup(length, trussMaterial);
-        if (axis === 'z') truss.rotation.y = Math.PI / 2;
-        if (axis === 'y') truss.rotation.z = Math.PI / 2; 
-        truss.position.set(x, y, z);
-        trussGroup.add(truss);
-      };
 
       const drawnCorners = new Set();
       const safeDrawCorner = (x, y, z) => {
@@ -542,6 +587,15 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
       }
     });
 
+    // Renderizar Peças Soltas (Free Pieces)
+    if (freePieces && freePieces.length > 0) {
+      freePieces.forEach(fp => {
+         const px = fp.x - centerX + (fp.isVertical ? CORNER_SIZE/2 : fp.length/2);
+         const pz = fp.y - centerZ + (fp.isVertical ? fp.length/2 : CORNER_SIZE/2);
+         drawTruss(px, CORNER_SIZE/2, pz, fp.length, fp.isVertical ? 'z' : 'x');
+      });
+    }
+
     const handleCameraMove = (deltaX, deltaY) => {
       const q = new THREE.Quaternion().setFromEuler(new THREE.Euler((deltaY * Math.PI) / 360, (deltaX * Math.PI) / 360, 0, 'XYZ'));
       camera.position.sub(new THREE.Vector3(centerX, centerY, centerZ));
@@ -569,7 +623,6 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
       camera.translateZ(Math.sign(e.deltaY) * 50);
     }, { passive: false });
 
-    // Correção Touch Eventos em Mobile (Rotação e Zoom/Pinça)
     container.addEventListener('touchstart', (e) => {
       e.preventDefault();
       if (e.touches.length === 1) {
@@ -598,7 +651,7 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
         );
         if (previousTouchDist > 0) {
           const delta = previousTouchDist - dist;
-          camera.translateZ(delta * 2.5); // Sensibilidade ajustada
+          camera.translateZ(delta * 2.5); 
         }
         previousTouchDist = dist;
       }
@@ -629,7 +682,7 @@ const ThreeDViewer = ({ boxes, bounds, onClose, showcaseMode = false, projectNam
       if (renderer) { renderer.dispose(); renderer.forceContextLoss(); }
       if (container) container.innerHTML = '';
     };
-  }, [boxes, isReady, bounds, showcaseMode]);
+  }, [boxes, freePieces, isReady, bounds, showcaseMode]);
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-900 animate-in fade-in zoom-in-95 duration-300">
@@ -689,7 +742,7 @@ export default function App() {
   const [screwsPerConn, setScrewsPerConn] = useState(4);
   const [pastHistory, setPastHistory] = useState([]); 
   const [errorMsg, setErrorMsg] = useState('');
-  const [viewMode, setViewMode] = useState('top'); // 'top' ou 'front'
+  const [viewMode, setViewMode] = useState('top'); 
   
   const [boxes, setBoxes] = useState(() => {
     const initPieces = DEFAULT_PIECES.reduce((acc, p) => ({ ...acc, [p]: true }), {});
@@ -697,6 +750,8 @@ export default function App() {
     initBox.plan = generatePlan(initBox.w, initBox.h, initBox.alt, initPieces);
     return [initBox];
   });
+  
+  const [freePieces, setFreePieces] = useState([]); 
   
   const [activeBoxId, setActiveBoxId] = useState(boxes[0].id);
   const activeBox = boxes.find(b => b.id === activeBoxId) || boxes[0];
@@ -710,9 +765,15 @@ export default function App() {
   
   const [isDraggingCanvas, setIsDraggingCanvas] = useState(false);
   const [draggingBoxId, setDraggingBoxId] = useState(null);
+  const [resizingEdge, setResizingEdge] = useState(null);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  
+  const [draggingPieceInfo, setDraggingPieceInfo] = useState(null); 
+  const [draggingFreePiece, setDraggingFreePiece] = useState(null); 
+  
   const lastTouchRef = useRef({ x: 0, y: 0, dist: 0 });
   const dragBoxStartRef = useRef({ boxX: 0, boxY: 0, mouseX: 0, mouseY: 0 }); 
+  const dragMovedRef = useRef(false); 
   
   const [editingPiece, setEditingPiece] = useState(null); 
   const [show3D, setShow3D] = useState(false);
@@ -722,47 +783,98 @@ export default function App() {
   const [projects, setProjects] = useState(() => {
     try { return JSON.parse(localStorage.getItem('trussProjects')) || []; } catch { return []; }
   });
+  const [cloudProjects, setCloudProjects] = useState([]);
   const [newProjectName, setNewProjectName] = useState("");
+  const [user, setUser] = useState(null);
+  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
   
   const [mobilePanel, setMobilePanel] = useState('none'); 
 
+  // --- REFS PARA O EVENTO GLOBAL ---
   const boxesRef = useRef(boxes);
+  const freePiecesRef = useRef(freePieces);
   const activeBoxIdRef = useRef(activeBoxId);
   const activePiecesRef = useRef(activePieces);
+  const draggingFreePieceRef = useRef(draggingFreePiece);
+  const viewModeRef = useRef(viewMode);
+  const editingPieceRef = useRef(editingPiece);
   
+  const panRef = useRef(pan);
+  const scaleRef = useRef(scale);
+
   useEffect(() => {
     boxesRef.current = boxes;
+    freePiecesRef.current = freePieces;
     activeBoxIdRef.current = activeBoxId;
     activePiecesRef.current = activePieces;
-  }, [boxes, activeBoxId, activePieces]);
+    draggingFreePieceRef.current = draggingFreePiece;
+    viewModeRef.current = viewMode;
+    editingPieceRef.current = editingPiece;
+    panRef.current = pan;
+    scaleRef.current = scale;
+  }, [boxes, freePieces, activeBoxId, activePieces, draggingFreePiece, viewMode, editingPiece, pan, scale]);
 
-  // CÁLCULO DE LIMITES ATUALIZADO BASEADO NA VIEWMODE (Visão de topo vs Frontal)
+  // Firebase Init Auth
+  useEffect(() => {
+    if (!auth) return;
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch(err) { console.error("Erro Autenticação:", err); }
+    };
+    initAuth();
+    const unsub = onAuthStateChanged(auth, setUser);
+    return () => unsub();
+  }, []);
+
+  // Firebase Listener Nuvem
+  useEffect(() => {
+    if (!user || !db) return;
+    const collRef = collection(db, 'artifacts', appId, 'public', 'data', 'projects');
+    const unsub = onSnapshot(collRef, (snap) => {
+      const projs = [];
+      snap.forEach(d => projs.push({ id: d.id, ...d.data() }));
+      setCloudProjects(projs.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp)));
+    }, err => console.error("Erro Nuvem:", err));
+    return () => unsub();
+  }, [user]);
+
   const bounds = useMemo(() => {
-    if (boxes.length === 0) return { minX: 0, minY: 0, maxX: 800, maxY: 600 };
-    
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     
     boxes.forEach(b => {
-       const actW = (b.w > 0) ? (b.plan?.top?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
-       
+       const actW = getActW(b);
        const renderW = actW;
-       const renderH = viewMode === 'top' 
-          ? ((b.h > 0) ? (b.plan?.left?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE)
-          : ((b.alt > 0) ? (b.plan?.pillarFL?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE);
+       const renderH = viewMode === 'top' ? getActH(b) : getActAlt(b);
        
        minX = Math.min(minX, b.x);
        minY = Math.min(minY, b.y);
        maxX = Math.max(maxX, b.x + renderW);
        maxY = Math.max(maxY, b.y + renderH);
     });
+
+    freePieces.forEach(fp => {
+       const renderW = fp.isVertical ? CORNER_SIZE : fp.length;
+       const renderH = fp.isVertical ? fp.length : CORNER_SIZE;
+       minX = Math.min(minX, fp.x);
+       minY = Math.min(minY, fp.y);
+       maxX = Math.max(maxX, fp.x + renderW);
+       maxY = Math.max(maxY, fp.y + renderH);
+    });
     
+    if (minX === Infinity) return { minX: 0, minY: 0, maxX: 800, maxY: 600 };
+
     return { 
       minX: minX - 50, 
       minY: minY - 50, 
       maxX: maxX + 50, 
       maxY: maxY + 50 
     };
-  }, [boxes, viewMode]);
+  }, [boxes, freePieces, viewMode]);
 
   const centerView = useCallback(() => {
     if (!container2DRef.current) return;
@@ -792,13 +904,14 @@ export default function App() {
   }, [bounds]);
 
   useEffect(() => {
-    const t = setTimeout(() => centerView(), 50);
+    const t = setTimeout(() => centerView(), 150);
     return () => clearTimeout(t);
-  }, [viewMode, centerView]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode]); 
 
   const recordHistory = useCallback(() => {
     setPastHistory(prev => {
-      const currentStateStr = JSON.stringify(boxesRef.current);
+      const currentStateStr = JSON.stringify({ boxes: boxesRef.current, freePieces: freePiecesRef.current });
       if (prev.length > 0 && JSON.stringify(prev[prev.length - 1]) === currentStateStr) return prev;
       return [...prev, JSON.parse(currentStateStr)].slice(-20); 
     });
@@ -808,10 +921,11 @@ export default function App() {
     setPastHistory(prev => {
       if (prev.length === 0) return prev;
       const newPast = [...prev];
-      const previousBoxes = newPast.pop();
-      setBoxes(previousBoxes);
-      if (!previousBoxes.find(b => b.id === activeBoxIdRef.current)) {
-        setActiveBoxId(previousBoxes[0].id);
+      const previousState = newPast.pop();
+      setBoxes(previousState.boxes);
+      setFreePieces(previousState.freePieces || []);
+      if (!previousState.boxes.find(b => b.id === activeBoxIdRef.current) && previousState.boxes.length > 0) {
+        setActiveBoxId(previousState.boxes[0].id);
       }
       return newPast;
     });
@@ -854,23 +968,152 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') { e.preventDefault(); cutBox(); }
       if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'd' || e.key.toLowerCase() === 'c')) { e.preventDefault(); duplicateBox(); }
+      
+      // Atalho R para rodar a peça
+      if (e.key.toLowerCase() === 'r') {
+        if (draggingFreePieceRef.current) {
+          e.preventDefault();
+          const dfp = draggingFreePieceRef.current;
+          setFreePieces(prev => prev.map(fp => fp.id === dfp.id ? { ...fp, isVertical: !fp.isVertical } : fp));
+          const newOffset = { offsetX: dfp.offsetY, offsetY: dfp.offsetX };
+          setDraggingFreePiece(prev => ({ ...prev, ...newOffset }));
+          draggingFreePieceRef.current = { ...dfp, ...newOffset };
+        } else if (editingPieceRef.current) {
+          e.preventDefault();
+          recordHistory();
+          const piece = editingPieceRef.current;
+          if (piece.type === 'box') {
+             const { boxId, edgeId, index, length, x, y, isVertical } = piece;
+             const newId = generateId();
+             const newFreePiece = {
+                id: newId,
+                length: length,
+                x: (x - panRef.current.x) / scaleRef.current - (isVertical ? CORNER_SIZE/2 : length/2),
+                y: (y - panRef.current.y) / scaleRef.current - (isVertical ? length/2 : CORNER_SIZE/2),
+                isVertical: !isVertical
+             };
+             setFreePieces(prev => [...prev, newFreePiece]);
+             setBoxes(prev => prev.map(box => {
+                if (box.id !== boxId) return box;
+                const newPlan = JSON.parse(JSON.stringify(box.plan));
+                newPlan[edgeId].pieces.splice(index, 1);
+                return { ...box, plan: newPlan, isManual: true };
+             }));
+          } else {
+             setFreePieces(prev => prev.map(fp => fp.id === piece.id ? { ...fp, isVertical: !fp.isVertical } : fp));
+          }
+          setEditingPiece(null);
+        }
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, cutBox, duplicateBox]);
+  }, [handleUndo, cutBox, duplicateBox, recordHistory]);
 
+  // --- O NOVO EVENTO GLOBAL UP COM RECONEXÃO DE PEÇAS ---
   useEffect(() => {
     const handleGlobalUp = () => {
+      if (draggingFreePieceRef.current) {
+        const dfp = draggingFreePieceRef.current;
+        const fp = freePiecesRef.current.find(p => p.id === dfp.id);
+        
+        if (fp) {
+          let snapped = false;
+          const SNAP_RADIUS = 30; 
+
+          for (let b of boxesRef.current) {
+            if (!b.plan) continue;
+            
+            const actW = getActW(b);
+            const actH = getActH(b);
+            const actualAlt = getActAlt(b);
+
+            const bx = b.x;
+            const by = b.y;
+
+            const fpCx = fp.x + (fp.isVertical ? CORNER_SIZE/2 : fp.length/2);
+            const fpCy = fp.y + (fp.isVertical ? fp.length/2 : CORNER_SIZE/2);
+
+            const edges = [];
+            if (viewModeRef.current === 'top') {
+              if (b.w > 0) {
+                edges.push({ id: 'top', isVert: false, x: bx + CORNER_SIZE, y: by, len: actW - CORNER_SIZE*2, arr: b.plan.top?.pieces });
+                if (b.h > 0) edges.push({ id: 'bottom', isVert: false, x: bx + CORNER_SIZE, y: by + actH - CORNER_SIZE, len: actW - CORNER_SIZE*2, arr: b.plan.bottom?.pieces });
+              }
+              if (b.h > 0) {
+                edges.push({ id: 'left', isVert: true, x: bx, y: by + CORNER_SIZE, len: actH - CORNER_SIZE*2, arr: b.plan.left?.pieces });
+                if (b.w > 0) edges.push({ id: 'right', isVert: true, x: bx + actW - CORNER_SIZE, y: by + CORNER_SIZE, len: actH - CORNER_SIZE*2, arr: b.plan.right?.pieces });
+              }
+            } else {
+              if (b.w > 0) {
+                edges.push({ id: 'top', isVert: false, x: bx + CORNER_SIZE, y: by, len: actW - CORNER_SIZE*2, arr: b.plan.top?.pieces });
+                if (b.alt > 0) edges.push({ id: 'bottom', isVert: false, x: bx + CORNER_SIZE, y: by + actualAlt - CORNER_SIZE, len: actW - CORNER_SIZE*2, arr: b.plan.bottom?.pieces });
+              }
+              if (b.alt > 0) {
+                edges.push({ id: 'pillarFL', isVert: true, x: bx, y: by + CORNER_SIZE, len: actualAlt - CORNER_SIZE*2, arr: b.plan.pillarFL?.pieces });
+                if (b.w > 0) edges.push({ id: 'pillarFR', isVert: true, x: bx + actW - CORNER_SIZE, y: by + CORNER_SIZE, len: actualAlt - CORNER_SIZE*2, arr: b.plan.pillarFR?.pieces });
+              }
+            }
+
+            for (let edge of edges) {
+              if (!edge.arr) continue;
+              if (fp.isVertical !== edge.isVert) continue;
+
+              let distToLine = 0;
+              let alongLine = 0;
+              if (!edge.isVert) {
+                distToLine = Math.abs(fpCy - (edge.y + CORNER_SIZE/2));
+                alongLine = fpCx - edge.x;
+              } else {
+                distToLine = Math.abs(fpCx - (edge.x + CORNER_SIZE/2));
+                alongLine = fpCy - edge.y;
+              }
+
+              if (distToLine < SNAP_RADIUS && alongLine > -SNAP_RADIUS && alongLine < edge.len + SNAP_RADIUS) {
+                let insertIndex = 0;
+                let currentPos = 0;
+                for (let i = 0; i < edge.arr.length; i++) {
+                   if (alongLine < currentPos + edge.arr[i]/2) {
+                      break;
+                   }
+                   currentPos += edge.arr[i];
+                   insertIndex++;
+                }
+
+                setBoxes(prev => prev.map(box => {
+                  if (box.id !== b.id) return box;
+                  const newPlan = JSON.parse(JSON.stringify(box.plan));
+                  if (newPlan[edge.id] && newPlan[edge.id].pieces) {
+                     newPlan[edge.id].pieces.splice(insertIndex, 0, fp.length);
+                  }
+                  return { ...box, plan: newPlan, isManual: true };
+                }));
+
+                setFreePieces(prev => prev.filter(p => p.id !== fp.id));
+                snapped = true;
+                break;
+              }
+            }
+            if (snapped) break;
+          }
+        }
+      }
+
       setIsDraggingCanvas(false);
       setDraggingBoxId(null);
+      setResizingEdge(null);
+      setDraggingPieceInfo(null);
+      setDraggingFreePiece(null);
+      draggingFreePieceRef.current = null;
     };
+
     window.addEventListener('mouseup', handleGlobalUp);
     window.addEventListener('touchend', handleGlobalUp);
     return () => {
       window.removeEventListener('mouseup', handleGlobalUp);
       window.removeEventListener('touchend', handleGlobalUp);
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addBox = () => {
     recordHistory();
@@ -918,47 +1161,204 @@ export default function App() {
     });
   };
 
-  const handlePieceClick = (boxId, edgeId, index, length, clientX, clientY) => {
-    setActiveBoxId(boxId);
-    const available = Object.entries(activePieces).filter(([, v]) => v).map(([p]) => parseInt(p));
-    const splits = getValidSplits(length, available);
-    setEditingPiece({ boxId, edgeId, index, length, splits, x: clientX, y: clientY });
+  const spawnFreePiece = (length) => {
+     recordHistory();
+     const cx = (window.innerWidth / 2 - pan.x) / scale;
+     const cy = (window.innerHeight / 2 - pan.y) / scale;
+     const newPiece = { id: generateId(), length, x: cx, y: cy, isVertical: false };
+     setFreePieces(prev => [...prev, newPiece]);
+  };
+
+  const handlePieceClick = (type, boxId, edgeId, index, length, totalPieces, clientX, clientY, isVertical) => {
+    if (type === 'box') {
+      setActiveBoxId(boxId);
+      const available = Object.entries(activePieces).filter(([, v]) => v).map(([p]) => parseInt(p));
+      const splits = getValidSplits(length, available);
+      setEditingPiece({ type: 'box', boxId, edgeId, index, length, totalPieces, splits, x: clientX, y: clientY, isVertical });
+    } else {
+      const available = Object.entries(activePieces).filter(([, v]) => v).map(([p]) => parseInt(p));
+      const splits = getValidSplits(length, available);
+      setEditingPiece({ type: 'free', id: boxId, length, splits, x: clientX, y: clientY, isVertical });
+    }
+  };
+
+  const handleRemovePiece = () => {
+    if (!editingPiece) return;
+    recordHistory();
+    if (editingPiece.type === 'box') {
+      const { boxId, edgeId, index } = editingPiece;
+      setBoxes(prev => prev.map(box => {
+        if (box.id !== boxId) return box;
+        const newPlan = JSON.parse(JSON.stringify(box.plan)); // DEEP COPY
+        newPlan[edgeId].pieces.splice(index, 1);
+        return { ...box, plan: newPlan, isManual: true };
+      }));
+    } else {
+      setFreePieces(prev => prev.filter(fp => fp.id !== editingPiece.id));
+    }
+    setEditingPiece(null);
+  };
+
+  const handleRotatePiece = useCallback(() => {
+    if (!editingPiece) return;
+    recordHistory();
+    if (editingPiece.type === 'box') {
+       const { boxId, edgeId, index, length, x, y, isVertical } = editingPiece;
+       const newId = generateId();
+       const newFreePiece = {
+          id: newId,
+          length: length,
+          x: (x - panRef.current.x) / scaleRef.current - (isVertical ? CORNER_SIZE/2 : length/2),
+          y: (y - panRef.current.y) / scaleRef.current - (isVertical ? length/2 : CORNER_SIZE/2),
+          isVertical: !isVertical
+       };
+       setFreePieces(prev => [...prev, newFreePiece]);
+       setBoxes(prev => prev.map(box => {
+          if (box.id !== boxId) return box;
+          const newPlan = JSON.parse(JSON.stringify(box.plan));
+          newPlan[edgeId].pieces.splice(index, 1);
+          return { ...box, plan: newPlan, isManual: true };
+       }));
+    } else {
+       setFreePieces(prev => prev.map(fp => fp.id === editingPiece.id ? { ...fp, isVertical: !fp.isVertical } : fp));
+    }
+    setEditingPiece(null);
+  }, [editingPiece, recordHistory]);
+
+  const handleMovePiece = (direction) => {
+    if (!editingPiece || editingPiece.type !== 'box') return;
+    recordHistory();
+    const { boxId, edgeId, index } = editingPiece;
+    setBoxes(prev => prev.map(box => {
+      if (box.id !== boxId) return box;
+      const newPlan = JSON.parse(JSON.stringify(box.plan)); // DEEP COPY
+      const pieces = newPlan[edgeId].pieces;
+      
+      if (index + direction >= 0 && index + direction < pieces.length) {
+        const temp = pieces[index];
+        pieces[index] = pieces[index + direction];
+        pieces[index + direction] = temp;
+      }
+      return { ...box, plan: newPlan, isManual: true };
+    }));
+    setEditingPiece(prev => ({ ...prev, index: prev.index + direction }));
   };
 
   const applySplit = (splitArray) => {
     if (!editingPiece) return;
     recordHistory();
-    const { boxId, edgeId, index } = editingPiece;
-    setBoxes(prev => prev.map(box => {
-      if (box.id !== boxId) return box;
-      const newPlan = { ...box.plan };
-      newPlan[edgeId].pieces.splice(index, 1, ...splitArray);
-      return { ...box, plan: newPlan, isManual: true };
-    }));
+    
+    if (editingPiece.type === 'box') {
+      const { boxId, edgeId, index } = editingPiece;
+      setBoxes(prev => prev.map(box => {
+        if (box.id !== boxId) return box;
+        const newPlan = JSON.parse(JSON.stringify(box.plan)); // DEEP COPY
+        newPlan[edgeId].pieces.splice(index, 1, ...splitArray);
+        return { ...box, plan: newPlan, isManual: true };
+      }));
+    } else {
+      setFreePieces(prev => {
+        const oldPiece = prev.find(p => p.id === editingPiece.id);
+        if (!oldPiece) return prev;
+        const newPieces = [];
+        let currentPos = 0;
+        splitArray.forEach(len => {
+           newPieces.push({
+              id: generateId(),
+              length: len,
+              x: oldPiece.x + (oldPiece.isVertical ? 0 : currentPos),
+              y: oldPiece.y + (oldPiece.isVertical ? currentPos : 0),
+              isVertical: oldPiece.isVertical
+           });
+           currentPos += len;
+        });
+        return [...prev.filter(p => p.id !== editingPiece.id), ...newPieces];
+      });
+    }
     setEditingPiece(null);
   };
 
-  const saveProject = () => {
-    if (!newProjectName.trim()) return;
-    const newProj = { id: Date.now(), name: newProjectName, boxes, activePieces };
+  const saveProjectLocal = () => {
+    if (!newProjectName.trim()) {
+      setErrorMsg("⚠️ Digite um NOME para o projeto no campo acima antes de guardar.");
+      setTimeout(() => setErrorMsg(''), 5000);
+      return;
+    }
+    const newProj = { id: Date.now(), name: newProjectName, boxes, freePieces, activePieces, timestamp: new Date().toISOString() };
     const updated = [...projects, newProj];
     setProjects(updated);
     localStorage.setItem('trussProjects', JSON.stringify(updated));
     setNewProjectName("");
+    setErrorMsg("✓ Guardado localmente com sucesso!");
+    setTimeout(() => setErrorMsg(''), 3000);
+  };
+
+  const saveToCloud = async () => {
+    if (!newProjectName.trim()) {
+      setErrorMsg("⚠️ Digite um NOME para o projeto no campo acima antes de guardar na nuvem.");
+      setTimeout(() => setErrorMsg(''), 5000);
+      return;
+    }
+    if (!db) {
+      setErrorMsg("⚠️ O Firebase não está configurado. Utilize o botão Local.");
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+    if (!user) {
+      setErrorMsg("⚠️ A aguardar autenticação para a nuvem. Tente novamente.");
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+    
+    setIsCloudSyncing(true);
+    try {
+      const projId = Date.now().toString();
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'projects', projId);
+      await setDoc(docRef, {
+        name: newProjectName,
+        boxes,
+        freePieces: freePieces || [],
+        activePieces,
+        ownerId: user.uid,
+        timestamp: new Date().toISOString()
+      });
+      setNewProjectName("");
+      setErrorMsg("✓ Guardado na Nuvem!");
+      setTimeout(() => setErrorMsg(''), 3000);
+    } catch (err) {
+      console.error("Erro ao guardar", err);
+      setErrorMsg("⚠️ Erro ao guardar na Nuvem. Verifique a ligação.");
+      setTimeout(() => setErrorMsg(''), 4000);
+    } finally {
+      setIsCloudSyncing(false);
+    }
   };
 
   const loadProject = (proj) => {
     setActivePieces(proj.activePieces);
     setBoxes(proj.boxes);
-    setActiveBoxId(proj.boxes[0].id);
+    setFreePieces(proj.freePieces || []);
+    if (proj.boxes && proj.boxes.length > 0) setActiveBoxId(proj.boxes[0].id);
     setEditingPiece(null);
     setMobilePanel('none'); 
   };
 
-  const deleteProject = (id) => {
+  const deleteProjectLocal = (id) => {
     const updated = projects.filter(p => p.id !== id);
     setProjects(updated);
     localStorage.setItem('trussProjects', JSON.stringify(updated));
+  };
+
+  const deleteProjectCloud = async (id, ownerId) => {
+    if (!user || !db) return;
+    if (ownerId !== user.uid) {
+       setErrorMsg("⚠️ Apenas o utilizador que criou o projeto pode apagá-lo.");
+       setTimeout(() => setErrorMsg(''), 4000);
+       return;
+    }
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'projects', id));
+    } catch(err) { console.error(err); }
   };
 
   const handleExportPDF = () => {
@@ -985,12 +1385,92 @@ export default function App() {
         await window.html2pdf().set(opt).from(element).save();
       } catch (error) {
         console.error('Erro ao exportar PDF:', error);
-        setErrorMsg('Não foi possível gerar o ficheiro PDF. Tente novamente.');
+        setErrorMsg('⚠️ Não foi possível gerar o ficheiro PDF. Tente novamente.');
         setTimeout(() => setErrorMsg(''), 5000);
       } finally {
         setIsExportingPDF(false);
       }
     }, 500);
+  };
+
+  const applyResize = (clientX, clientY) => {
+    const dx = (clientX - resizingEdge.mouseX) / scale;
+    const dy = (clientY - resizingEdge.mouseY) / scale;
+
+    if (Math.abs(clientX - resizingEdge.mouseX) > 4 || Math.abs(clientY - resizingEdge.mouseY) > 4) {
+       dragMovedRef.current = true;
+    }
+
+    setBoxes(prev => prev.map(b => {
+      if (b.id !== resizingEdge.boxId) return b;
+      let newW = resizingEdge.startW;
+      let newH = resizingEdge.startH;
+      let newAlt = resizingEdge.startAlt;
+      let newX = resizingEdge.startX;
+      let newY = resizingEdge.startY;
+
+      if (resizingEdge.edgeId === 'right') newW = Math.max(0, resizingEdge.startW + dx);
+      else if (resizingEdge.edgeId === 'left') {
+        newW = Math.max(0, resizingEdge.startW - dx);
+        newX = resizingEdge.startX + (resizingEdge.startW - newW);
+      }
+      else if (resizingEdge.edgeId === 'bottom') {
+        if (viewMode === 'top') newH = Math.max(0, resizingEdge.startH + dy);
+        else newAlt = Math.max(0, resizingEdge.startAlt + dy);
+      }
+      else if (resizingEdge.edgeId === 'top') {
+        if (viewMode === 'top') {
+          newH = Math.max(0, resizingEdge.startH - dy);
+          newY = resizingEdge.startY + (resizingEdge.startH - newH);
+        } else {
+          newAlt = Math.max(0, resizingEdge.startAlt - dy);
+          newY = resizingEdge.startY + (resizingEdge.startAlt - newAlt);
+        }
+      }
+      else if (resizingEdge.edgeId.includes('pillar')) {
+        newAlt = Math.max(0, resizingEdge.startAlt + dy);
+      }
+
+      const updatedBox = { ...b, w: Math.round(newW), h: Math.round(newH), alt: Math.round(newAlt), x: newX, y: newY };
+      if (!updatedBox.isManual) {
+         updatedBox.plan = generatePlan(updatedBox.w, updatedBox.h, updatedBox.alt, activePiecesRef.current);
+      }
+      return updatedBox;
+    }));
+  };
+
+  const handleEdgeMouseDown = (e, boxId, edgeId) => {
+    e.stopPropagation();
+    if (e.button !== 0 || editingPiece) return;
+    recordHistory();
+    setActiveBoxId(boxId);
+    dragMovedRef.current = false;
+    
+    const box = boxesRef.current.find(b => b.id === boxId);
+    if (box) {
+      setResizingEdge({
+        boxId, edgeId, startW: box.w, startH: box.h, startAlt: box.alt,
+        startX: box.x, startY: box.y, mouseX: e.clientX, mouseY: e.clientY
+      });
+    }
+  };
+
+  const handleEdgeTouchStart = (e, boxId, edgeId) => {
+    e.stopPropagation();
+    if (editingPiece) return;
+    recordHistory();
+    setActiveBoxId(boxId);
+    dragMovedRef.current = false;
+    
+    const box = boxesRef.current.find(b => b.id === boxId);
+    if (box) {
+      setResizingEdge({
+        boxId, edgeId, startW: box.w, startH: box.h, startAlt: box.alt,
+        startX: box.x, startY: box.y, mouseX: e.touches[0].clientX, mouseY: e.touches[0].clientY
+      });
+      lastTouchRef.current.x = e.touches[0].clientX;
+      lastTouchRef.current.y = e.touches[0].clientY;
+    }
   };
 
   const handleWheel = (e) => {
@@ -1010,6 +1490,7 @@ export default function App() {
     if (e.button !== 0 || editingPiece) return;
     recordHistory(); 
     setActiveBoxId(boxId); setDraggingBoxId(boxId);
+    dragMovedRef.current = false;
     
     const box = boxesRef.current.find(b => b.id === boxId);
     if (box) {
@@ -1018,9 +1499,50 @@ export default function App() {
   };
   
   const handleMouseMove = (e) => {
-    if (draggingBoxId) {
+    if (draggingPieceInfo) {
+       const dx = e.clientX - draggingPieceInfo.startX;
+       const dy = e.clientY - draggingPieceInfo.startY;
+       if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+          dragMovedRef.current = true;
+          recordHistory();
+          const newId = generateId();
+          const newFreePiece = {
+             id: newId,
+             length: draggingPieceInfo.length,
+             x: (e.clientX - pan.x) / scale - draggingPieceInfo.offsetX,
+             y: (e.clientY - pan.y) / scale - draggingPieceInfo.offsetY,
+             isVertical: draggingPieceInfo.isVertical
+          };
+          setFreePieces(prev => [...prev, newFreePiece]);
+
+          setBoxes(prev => prev.map(b => {
+             if (b.id !== draggingPieceInfo.boxId) return b;
+             const newPlan = JSON.parse(JSON.stringify(b.plan)); // DEEP COPY FIX
+             newPlan[draggingPieceInfo.edgeId].pieces.splice(draggingPieceInfo.index, 1);
+             return { ...b, plan: newPlan, isManual: true };
+          }));
+
+          setDraggingFreePiece({ id: newId, offsetX: draggingPieceInfo.offsetX, offsetY: draggingPieceInfo.offsetY });
+          draggingFreePieceRef.current = { id: newId, offsetX: draggingPieceInfo.offsetX, offsetY: draggingPieceInfo.offsetY };
+          setDraggingPieceInfo(null);
+       }
+    } else if (draggingFreePiece) {
+       dragMovedRef.current = true;
+       setFreePieces(prev => prev.map(fp =>
+          fp.id === draggingFreePiece.id
+          ? { ...fp, x: (e.clientX - pan.x) / scale - draggingFreePiece.offsetX, y: (e.clientY - pan.y) / scale - draggingFreePiece.offsetY }
+          : fp
+       ));
+    } else if (resizingEdge) {
+      applyResize(e.clientX, e.clientY);
+    } else if (draggingBoxId) {
       const dx = (e.clientX - dragBoxStartRef.current.mouseX) / scale;
       const dy = (e.clientY - dragBoxStartRef.current.mouseY) / scale;
+      
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+         dragMovedRef.current = true;
+      }
+      
       const rawX = dragBoxStartRef.current.boxX + dx;
       const rawY = dragBoxStartRef.current.boxY + dy;
       
@@ -1055,6 +1577,8 @@ export default function App() {
     recordHistory(); 
     setActiveBoxId(boxId);
     setDraggingBoxId(boxId);
+    dragMovedRef.current = false;
+    
     lastTouchRef.current.x = e.touches[0].clientX;
     lastTouchRef.current.y = e.touches[0].clientY;
     
@@ -1069,9 +1593,52 @@ export default function App() {
     if (e.touches.length === 1) {
        const touch = e.touches[0];
        
-       if (draggingBoxId) {
+       if (draggingPieceInfo) {
+          const dx = touch.clientX - draggingPieceInfo.startX;
+          const dy = touch.clientY - draggingPieceInfo.startY;
+          if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+             dragMovedRef.current = true;
+             recordHistory();
+             const newId = generateId();
+             const newFreePiece = {
+                id: newId,
+                length: draggingPieceInfo.length,
+                x: (touch.clientX - pan.x) / scale - draggingPieceInfo.offsetX,
+                y: (touch.clientY - pan.y) / scale - draggingPieceInfo.offsetY,
+                isVertical: draggingPieceInfo.isVertical
+             };
+             setFreePieces(prev => [...prev, newFreePiece]);
+
+             setBoxes(prev => prev.map(b => {
+                if (b.id !== draggingPieceInfo.boxId) return b;
+                const newPlan = JSON.parse(JSON.stringify(b.plan)); // DEEP COPY FIX
+                newPlan[draggingPieceInfo.edgeId].pieces.splice(draggingPieceInfo.index, 1);
+                return { ...b, plan: newPlan, isManual: true };
+             }));
+
+             setDraggingFreePiece({ id: newId, offsetX: draggingPieceInfo.offsetX, offsetY: draggingPieceInfo.offsetY });
+             draggingFreePieceRef.current = { id: newId, offsetX: draggingPieceInfo.offsetX, offsetY: draggingPieceInfo.offsetY };
+             setDraggingPieceInfo(null);
+          }
+       } else if (draggingFreePiece) {
+          dragMovedRef.current = true;
+          setFreePieces(prev => prev.map(fp =>
+             fp.id === draggingFreePiece.id
+             ? { ...fp, x: (touch.clientX - pan.x) / scale - draggingFreePiece.offsetX, y: (touch.clientY - pan.y) / scale - draggingFreePiece.offsetY }
+             : fp
+          ));
+       } else if (resizingEdge) {
+          applyResize(touch.clientX, touch.clientY);
+          lastTouchRef.current.x = touch.clientX;
+          lastTouchRef.current.y = touch.clientY;
+       } else if (draggingBoxId) {
           const dx = (touch.clientX - dragBoxStartRef.current.mouseX) / scale;
           const dy = (touch.clientY - dragBoxStartRef.current.mouseY) / scale;
+
+          if (Math.abs(touch.clientX - dragBoxStartRef.current.mouseX) > 5 || Math.abs(touch.clientY - dragBoxStartRef.current.mouseY) > 5) {
+             dragMovedRef.current = true;
+          }
+          
           const rawX = dragBoxStartRef.current.boxX + dx;
           const rawY = dragBoxStartRef.current.boxY + dy;
           
@@ -1110,6 +1677,10 @@ export default function App() {
       });
     });
     
+    freePieces.forEach(fp => {
+       list[fp.length] = (list[fp.length] || 0) + 1;
+    });
+
     const bomArray = Object.entries(list).map(([len, qty]) => ({ name: `Truss ${len}cm`, qty }))
       .sort((a, b) => parseInt(b.name.split(' ')[1]) - parseInt(a.name.split(' ')[1]));
     
@@ -1120,45 +1691,94 @@ export default function App() {
       bomArray.push({ name: `Parafusos (Unid.)`, qty: ligacoes * screwsPerConn });
     }
     return bomArray;
-  }, [boxes, screwsPerConn]);
+  }, [boxes, freePieces, screwsPerConn]);
 
-  const renderTrussEdge = (boxId, pieces, startX, startY, isHorizontal, edgeId) => {
+  const renderTrussEdge = (boxId, boxX, boxY, pieces, startX, startY, isHorizontal, edgeId) => {
     if (!pieces || pieces.length === 0) return null;
     let currentPos = isHorizontal ? startX : startY;
-    return pieces.map((p, i) => {
-      const id = `${boxId}-${edgeId}-${i}`;
-      const rectX = isHorizontal ? currentPos : startX; const rectY = isHorizontal ? startY : currentPos;
-      const rectW = isHorizontal ? p : CORNER_SIZE; const rectH = isHorizontal ? CORNER_SIZE : p;
-      const textX = rectX + rectW / 2; const textY = rectY + rectH / 2;
-      
-      const element = (
-        <g key={id} 
-           onClick={(e) => { e.stopPropagation(); handlePieceClick(boxId, edgeId, i, p, e.clientX, e.clientY); }}
-           onTouchEnd={(e) => { e.stopPropagation(); handlePieceClick(boxId, edgeId, i, p, e.changedTouches[0].clientX, e.changedTouches[0].clientY); }}
-           className="transition-all duration-200 cursor-pointer hover:opacity-80 group">
-          <rect x={rectX} y={rectY} width={rectW} height={rectH} fill="#ffffff" stroke="#1e293b" strokeWidth={1}
-            className="group-hover:fill-blue-50 group-hover:stroke-blue-500 group-hover:stroke-2" vectorEffect="non-scaling-stroke" />
-          <line x1={isHorizontal ? rectX : rectX+3} y1={isHorizontal ? rectY+3 : rectY} x2={isHorizontal ? rectX+rectW : rectX+3} y2={isHorizontal ? rectY+3 : rectY+rectH} stroke="#cbd5e1" strokeWidth="0.5" vectorEffect="non-scaling-stroke"/>
-          <line x1={isHorizontal ? rectX : rectX+12} y1={isHorizontal ? rectY+12 : rectY} x2={isHorizontal ? rectX+rectW : rectX+12} y2={isHorizontal ? rectY+12 : rectY+rectH} stroke="#cbd5e1" strokeWidth="0.5" vectorEffect="non-scaling-stroke"/>
+    
+    let cursor = 'pointer';
+    if (edgeId === 'left' || edgeId === 'right') cursor = 'ew-resize';
+    if (edgeId === 'top' || edgeId === 'bottom') cursor = 'ns-resize';
+    if (edgeId.includes('pillar')) cursor = 'ns-resize';
+
+    return (
+      <g onMouseDown={isExportingPDF ? null : (e) => handleEdgeMouseDown(e, boxId, edgeId)}
+         onTouchStart={isExportingPDF ? null : (e) => handleEdgeTouchStart(e, boxId, edgeId)}
+         style={{ cursor }}>
+        {pieces.map((p, i) => {
+          const id = `${boxId}-${edgeId}-${i}`;
+          const rectX = isHorizontal ? currentPos : startX; 
+          const rectY = isHorizontal ? startY : currentPos;
+          const rectW = isHorizontal ? p : CORNER_SIZE; 
+          const rectH = isHorizontal ? CORNER_SIZE : p;
+          const textX = rectX + rectW / 2; 
+          const textY = rectY + rectH / 2;
           
-          <text x={textX} y={textY} 
-                transform={`rotate(${isHorizontal ? 0 : -90} ${textX} ${textY})`} 
-                textAnchor="middle" 
-                dominantBaseline="central" 
-                fontSize="6.5" 
-                fill="#0f172a" 
-                fontWeight="800" 
-                stroke="#ffffff" 
-                strokeWidth="2.5" 
-                paintOrder="stroke" 
-                strokeLinejoin="round"
-                style={{ pointerEvents: 'none' }}>
-            {p}
-          </text>
-        </g>
-      );
-      currentPos += p; return element;
-    });
+          const globalRectX = boxX + rectX;
+          const globalRectY = boxY + rectY;
+
+          const element = (
+            <g key={id} 
+               onMouseDown={(e) => {
+                 if (isExportingPDF) return;
+                 e.stopPropagation();
+                 dragMovedRef.current = false;
+                 setDraggingPieceInfo({
+                    boxId, edgeId, index: i, length: p, isVertical: !isHorizontal,
+                    startX: e.clientX, startY: e.clientY,
+                    offsetX: (e.clientX - pan.x) / scale - globalRectX,
+                    offsetY: (e.clientY - pan.y) / scale - globalRectY,
+                 });
+               }}
+               onTouchStart={(e) => {
+                 if (isExportingPDF) return;
+                 e.stopPropagation();
+                 dragMovedRef.current = false;
+                 setDraggingPieceInfo({
+                    boxId, edgeId, index: i, length: p, isVertical: !isHorizontal,
+                    startX: e.touches[0].clientX, startY: e.touches[0].clientY,
+                    offsetX: (e.touches[0].clientX - pan.x) / scale - globalRectX,
+                    offsetY: (e.touches[0].clientY - pan.y) / scale - globalRectY,
+                 });
+               }}
+               onClick={(e) => { 
+                 e.stopPropagation(); 
+                 if (dragMovedRef.current) return; 
+                 handlePieceClick('box', boxId, edgeId, i, p, pieces.length, e.clientX, e.clientY, !isHorizontal); 
+               }}
+               onTouchEnd={(e) => { 
+                 e.stopPropagation(); 
+                 if (dragMovedRef.current) return; 
+                 handlePieceClick('box', boxId, edgeId, i, p, pieces.length, e.changedTouches[0].clientX, e.changedTouches[0].clientY, !isHorizontal); 
+               }}
+               className="transition-all duration-200 hover:opacity-80 group cursor-move">
+              <rect x={rectX} y={rectY} width={rectW} height={rectH} fill="#ffffff" stroke="#1e293b" strokeWidth={1}
+                className="group-hover:fill-blue-50 group-hover:stroke-blue-500 group-hover:stroke-2" vectorEffect="non-scaling-stroke" />
+              <line x1={isHorizontal ? rectX : rectX+3} y1={isHorizontal ? rectY+3 : rectY} x2={isHorizontal ? rectX+rectW : rectX+3} y2={isHorizontal ? rectY+3 : rectY+rectH} stroke="#cbd5e1" strokeWidth="0.5" vectorEffect="non-scaling-stroke"/>
+              <line x1={isHorizontal ? rectX : rectX+12} y1={isHorizontal ? rectY+12 : rectY} x2={isHorizontal ? rectX+rectW : rectX+12} y2={isHorizontal ? rectY+12 : rectY+rectH} stroke="#cbd5e1" strokeWidth="0.5" vectorEffect="non-scaling-stroke"/>
+              
+              <text x={textX} y={textY} 
+                    transform={`rotate(${isHorizontal ? 0 : -90} ${textX} ${textY})`} 
+                    textAnchor="middle" 
+                    dominantBaseline="central" 
+                    fontSize="6.5" 
+                    fill="#0f172a" 
+                    fontWeight="800" 
+                    stroke="#ffffff" 
+                    strokeWidth="2.5" 
+                    paintOrder="stroke" 
+                    strokeLinejoin="round"
+                    style={{ pointerEvents: 'none' }}>
+                {p}
+              </text>
+            </g>
+          );
+          currentPos += p; 
+          return element;
+        })}
+      </g>
+    );
   };
 
   let popoverSafeLeft = 0; let popoverSafeTop = 0;
@@ -1172,15 +1792,16 @@ export default function App() {
     <div className="flex flex-col h-[100dvh] bg-slate-50 font-sans text-slate-900 overflow-hidden print:bg-white print:h-auto" onClick={() => setEditingPiece(null)}>
       
       {errorMsg && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-red-500 text-white px-4 py-2 rounded-lg shadow-xl flex items-center gap-3 animate-in slide-in-from-top-2">
-           <span className="text-sm font-medium">{errorMsg}</span>
-           <button onClick={() => setErrorMsg('')} className="hover:bg-red-600 p-1 rounded-md transition-colors"><X size={16}/></button>
+        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-5 py-2.5 rounded-lg shadow-2xl flex items-center gap-3 animate-in slide-in-from-top-2 text-white font-medium text-sm ${errorMsg.includes('✓') ? 'bg-emerald-600' : 'bg-slate-800'}`}>
+           <span>{errorMsg}</span>
+           <button onClick={() => setErrorMsg('')} className="hover:bg-white/20 p-1 rounded-md transition-colors"><X size={16}/></button>
         </div>
       )}
 
       {(show3D || showcaseMode) && (
         <ThreeDViewer 
           boxes={boxes} 
+          freePieces={freePieces}
           bounds={bounds} 
           onClose={() => { setShow3D(false); setShowcaseMode(false); }} 
           showcaseMode={showcaseMode}
@@ -1196,7 +1817,7 @@ export default function App() {
             <h1 className="text-lg font-bold tracking-tight">TrussPlanner <span className="text-slate-400 font-normal hidden sm:inline">| Eventos</span></h1>
           </div>
           <div className="flex gap-2">
-            {boxes.some(b => b.w > 0 || b.h > 0 || b.alt > 0) && (
+            {(boxes.some(b => b.w > 0 || b.h > 0 || b.alt > 0) || freePieces.length > 0) && (
               <>
                 <button onClick={() => setShowcaseMode(true)} className="flex items-center gap-2 px-3 py-2 bg-amber-500 hover:bg-amber-400 text-amber-950 rounded-lg text-sm font-bold shadow-lg transition-colors">
                   <MonitorPlay size={16} /> <span className="hidden lg:inline">Apresentar</span>
@@ -1273,8 +1894,8 @@ export default function App() {
                   <div className="mt-2 p-2 bg-emerald-50 border border-emerald-200 rounded flex gap-2 text-emerald-800 text-xs items-center">
                     <CheckCircle2 size={14} className="shrink-0" />
                     <p><b>
-                      {activeBox.w > 0 ? (activeBox.plan?.top?.actualLength || 0) + 30 : 0}x
-                      {activeBox.h > 0 ? (activeBox.plan?.left?.actualLength || 0) + 30 : 0}
+                      {activeBox.w > 0 ? getActW(activeBox) - CORNER_SIZE*2 : 0}x
+                      {activeBox.h > 0 ? getActH(activeBox) - CORNER_SIZE*2 : 0}
                     </b></p>
                   </div>
                 )}
@@ -1286,11 +1907,16 @@ export default function App() {
                 </h2>
                 <div className="grid grid-cols-4 md:grid-cols-3 gap-1 max-h-32 overflow-y-auto mb-2 hide-scrollbar">
                   {DEFAULT_PIECES.map(p => (
-                    <label key={p} className="flex items-center gap-1 p-2 border border-slate-200 rounded cursor-pointer hover:bg-slate-50">
-                      <input type="checkbox" checked={activePieces[p]} onChange={() => handleTogglePiece(p)}
-                        className="w-3 h-3 text-blue-600" />
-                      <span className="text-xs font-medium">{p}</span>
-                    </label>
+                    <div key={p} className="flex items-center justify-between p-1.5 border border-slate-200 rounded hover:bg-slate-50">
+                      <label className="flex items-center gap-1 cursor-pointer flex-1">
+                        <input type="checkbox" checked={activePieces[p]} onChange={() => handleTogglePiece(p)}
+                          className="w-3 h-3 text-blue-600" />
+                        <span className="text-xs font-medium">{p}</span>
+                      </label>
+                      <button onClick={() => spawnFreePiece(p)} className="p-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 active:bg-blue-300 transition-colors" title="Inserir peça solta na tela">
+                        <Plus size={12}/>
+                      </button>
+                    </div>
                   ))}
                 </div>
                 <div className="flex items-center justify-between p-2 bg-slate-50 rounded border border-slate-200">
@@ -1303,24 +1929,55 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="p-3 flex-1 bg-slate-50 min-h-[150px]">
+              <div className="p-3 flex-1 bg-slate-50 min-h-[250px] flex flex-col">
                 <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-2">
-                  <Save size={16} /> Guardar
+                  <Save size={16} /> Guardar / Nuvem
                 </h2>
-                <div className="flex gap-2 mb-2">
-                  <input type="text" placeholder="Nome..." value={newProjectName} onChange={e => setNewProjectName(e.target.value)}
-                    className="flex-1 px-2 py-1 text-sm border border-slate-300 rounded outline-none" />
-                  <button onClick={saveProject} className="px-3 py-1 bg-slate-800 text-white rounded text-sm hover:bg-slate-700">OK</button>
+                <div className="flex flex-col gap-2 mb-3">
+                  <input type="text" placeholder="Nome do Projeto..." value={newProjectName} onChange={e => setNewProjectName(e.target.value)}
+                    className="w-full px-2 py-1.5 text-sm border border-slate-300 rounded outline-none font-medium text-slate-800" />
+                  <div className="flex gap-2">
+                    <button onClick={saveProjectLocal} className="flex-1 px-2 py-1.5 bg-slate-200 text-slate-800 rounded font-semibold text-xs hover:bg-slate-300 flex justify-center items-center gap-1 shadow-sm">Local</button>
+                    <button onClick={saveToCloud} disabled={isCloudSyncing} className="flex-1 px-2 py-1.5 bg-blue-600 text-white rounded font-bold text-xs hover:bg-blue-500 disabled:opacity-50 flex justify-center items-center gap-1 shadow-sm">
+                      {isCloudSyncing ? <RefreshCw size={14} className="animate-spin"/> : <CloudUpload size={14}/>} Nuvem
+                    </button>
+                  </div>
                 </div>
-                <div className="space-y-1 max-h-24 overflow-y-auto hide-scrollbar">
-                  {projects.map(p => (
-                    <div key={p.id} className="flex justify-between items-center p-2 bg-white border border-slate-200 rounded text-xs hover:border-blue-400">
-                      <button onClick={() => loadProject(p)} className="flex-1 text-left font-medium text-slate-700 flex items-center gap-1 truncate">
-                        <FolderOpen size={12} className="text-blue-500 shrink-0" /> <span className="truncate">{p.name}</span>
-                      </button>
-                      <button onClick={() => deleteProject(p.id)} className="text-red-400 hover:text-red-600 p-1 shrink-0"><Trash2 size={12}/></button>
+                
+                <div className="flex-1 overflow-y-auto hide-scrollbar space-y-3">
+                  {projects.length > 0 && (
+                    <div>
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">Locais (Neste PC)</h4>
+                      <div className="space-y-1">
+                        {projects.map(p => (
+                          <div key={p.id} className="flex justify-between items-center p-2 bg-white border border-slate-200 rounded text-xs hover:border-blue-400">
+                            <button onClick={() => loadProject(p)} className="flex-1 text-left font-medium text-slate-700 flex items-center gap-1 truncate">
+                              <FolderOpen size={12} className="text-slate-400 shrink-0" /> <span className="truncate">{p.name}</span>
+                            </button>
+                            <button onClick={() => deleteProjectLocal(p.id)} className="text-red-400 hover:text-red-600 p-1 shrink-0"><Trash2 size={12}/></button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  ))}
+                  )}
+
+                  {cloudProjects.length > 0 && (
+                    <div>
+                      <h4 className="text-[10px] font-bold text-blue-500 uppercase tracking-widest mb-1 flex items-center gap-1"><Cloud size={10}/> Partilhados na Nuvem</h4>
+                      <div className="space-y-1">
+                        {cloudProjects.map(p => (
+                          <div key={p.id} className="flex justify-between items-center p-2 bg-blue-50 border border-blue-100 rounded text-xs hover:border-blue-400">
+                            <button onClick={() => loadProject(p)} className="flex-1 text-left font-bold text-blue-900 flex items-center gap-1 truncate">
+                              <Cloud size={12} className="text-blue-500 shrink-0" /> <span className="truncate">{p.name}</span>
+                            </button>
+                            {p.ownerId === user?.uid && (
+                              <button onClick={() => deleteProjectCloud(p.id, p.ownerId)} className="text-red-400 hover:text-red-600 p-1 shrink-0"><Trash2 size={12}/></button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1348,15 +2005,41 @@ export default function App() {
             <div className="fixed z-[60] bg-white p-3 rounded-lg shadow-2xl border border-slate-200 w-[280px] max-w-[90vw] animate-in fade-in zoom-in no-print"
                  style={{ left: popoverSafeLeft, top: popoverSafeTop }} onClick={e => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-2">
-                <h3 className="font-bold text-slate-800 text-sm">Dividir ({editingPiece.length}cm)</h3>
+                <h3 className="font-bold text-slate-800 text-sm">Edição: Peça {editingPiece.length}cm</h3>
                 <button onClick={() => setEditingPiece(null)} className="p-1"><X size={16} className="text-slate-400 hover:text-red-500"/></button>
               </div>
-              <div className="max-h-40 overflow-y-auto space-y-1 pr-1 hide-scrollbar">
+
+              {/* BARRA DE FERRAMENTAS DE EDIÇÃO MANUAL (REMOVER / MOVER / RODAR) */}
+              <div className="flex justify-between items-center bg-slate-100 p-1.5 rounded-lg mb-3 border border-slate-200">
+                <button onClick={handleRotatePiece} className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-white rounded transition-all shadow-sm border border-slate-200 bg-white" title="Rodar / Soltar (Tecla R)">
+                  <RefreshCw size={14} />
+                </button>
+                
+                <button onClick={handleRemovePiece} className="px-3 py-1.5 text-xs font-bold text-red-600 hover:text-white hover:bg-red-500 rounded transition-all flex gap-1 items-center border border-red-200 hover:border-red-500 bg-white">
+                  <Trash2 size={14} /> Remover
+                </button>
+                
+                {editingPiece.type === 'box' ? (
+                  <div className="flex gap-1">
+                    <button onClick={() => handleMovePiece(-1)} disabled={editingPiece.index === 0} className="p-1.5 text-slate-600 hover:text-blue-600 bg-white shadow-sm border border-slate-200 rounded disabled:opacity-30 transition-all" title="Mover">
+                      <ArrowLeft size={14} />
+                    </button>
+                    <button onClick={() => handleMovePiece(1)} disabled={editingPiece.index === editingPiece.totalPieces - 1} className="p-1.5 text-slate-600 hover:text-blue-600 bg-white shadow-sm border border-slate-200 rounded disabled:opacity-30 transition-all" title="Mover">
+                      <ArrowRight size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="w-[68px]"></div> 
+                )}
+              </div>
+
+              <h4 className="text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wider">Dividir em:</h4>
+              <div className="max-h-32 overflow-y-auto space-y-1 pr-1 hide-scrollbar">
                 {editingPiece.splits.length === 0 ? (
                   <p className="text-xs text-amber-600 bg-amber-50 p-2 rounded border border-amber-200">Não há stock compatível.</p>
                 ) : (
                   editingPiece.splits.map((split, idx) => (
-                    <button key={idx} onClick={() => applySplit(split)} className="w-full flex items-center justify-between p-3 text-sm bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-400 rounded-lg shadow-sm">
+                    <button key={idx} onClick={() => applySplit(split)} className="w-full flex items-center justify-between p-2 text-sm bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-400 rounded-lg shadow-sm">
                       <span className="font-medium text-slate-700">{split.join(' + ')}</span><Split size={14} className="text-blue-500"/>
                     </button>
                   ))
@@ -1390,7 +2073,7 @@ export default function App() {
             
             {!isExportingPDF && (
               <div className="absolute top-2 left-2 z-10 flex items-center gap-1 bg-white/90 px-2 py-1 rounded shadow border border-slate-200 text-xs font-medium text-slate-600 pointer-events-none">
-                 <Magnet size={12} className="text-blue-500"/> Arraste (Encaixe Automático)
+                 <Magnet size={12} className="text-blue-500"/> Solte a Peça perto da Box
               </div>
             )}
 
@@ -1406,13 +2089,13 @@ export default function App() {
               <div style={{ transform: isExportingPDF ? 'none' : `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: '0 0' }} 
                    className={isExportingPDF ? 'w-full flex justify-center' : 'pointer-events-auto absolute top-0 left-0 min-w-[5000px] min-h-[5000px]'}>
                 
-                {/* SVG CORRIGIDO PARA EXPORTAÇÃO PDF: Usa viewBox dinâmica baseada nos bounds se isExportingPDF for true */}
                 <svg ref={svgRef} 
                   width={isExportingPDF ? bounds.maxX - bounds.minX + 100 : "5000px"} 
                   height={isExportingPDF ? bounds.maxY - bounds.minY + 100 : "5000px"} 
                   viewBox={isExportingPDF ? `${bounds.minX - 50} ${bounds.minY - 50} ${bounds.maxX - bounds.minX + 100} ${bounds.maxY - bounds.minY + 100}` : undefined}
                   className={isExportingPDF ? 'overflow-visible' : 'drop-shadow-xl overflow-visible'}>
                   
+                  {/* RENDERIZAR BOXES */}
                   {boxes.map(box => {
                     if (!box.plan) return null;
                     
@@ -1422,18 +2105,12 @@ export default function App() {
                     
                     if (!hasX && !hasY && !hasZ) return null;
 
-                    const actW = hasX ? (box.plan.top?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
-                    const actH = hasY ? (box.plan.left?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
-                    const actualAlt = hasZ ? (box.plan.pillarFL?.actualLength || 0) + CORNER_SIZE*2 : CORNER_SIZE;
-                    
-                    // Ajuste de largura/altura visual com base no modo (Planta ou Elevação)
-                    const renderW = actW;
-                    const renderH = viewMode === 'top' ? actH : actualAlt;
+                    const renderW = getActW(box);
+                    const renderH = viewMode === 'top' ? getActH(box) : getActAlt(box);
 
                     const isSelected = box.id === activeBoxId && !isExportingPDF;
                     const isBeingDragged = draggingBoxId === box.id && !isExportingPDF;
 
-                    // Definição geométrica dos cantos com base na visão atual
                     const corners2D = [];
                     corners2D.push({x: 0, y: 0});
                     if (hasX) corners2D.push({x: renderW - CORNER_SIZE, y: 0});
@@ -1455,7 +2132,6 @@ export default function App() {
                               onTouchStart={isExportingPDF ? null : (e) => handleBoxTouchStart(e, box.id)} 
                               className={isExportingPDF ? '' : 'cursor-move'} />
 
-                        {/* Pilares Intermediários - Visão Topo */}
                         {viewMode === 'top' && hasZ && hasX && box.plan.intermediatePillarsX?.map((xPos, idx) => {
                           const lineX = CORNER_SIZE + xPos;
                           return (
@@ -1498,7 +2174,6 @@ export default function App() {
                           );
                         })}
 
-                        {/* Linhas Guias de Dimensão */}
                         <g stroke="#94a3b8" strokeWidth="1.5" vectorEffect="non-scaling-stroke">
                           {hasX && (
                             <>
@@ -1525,7 +2200,6 @@ export default function App() {
                           )}
                         </g>
 
-                        {/* Desenhar Peças 2D baseadas na Visão */}
                         <g fill="#1e293b" stroke="#0f172a" strokeWidth="1">
                           {corners2D.map((pos, i) => (
                             <g key={`corner-${i}`}><rect x={pos.x} y={pos.y} width={CORNER_SIZE} height={CORNER_SIZE} /><text x={pos.x+7.5} y={pos.y+7.5} fill="white" fontSize="8" fontWeight="bold" textAnchor="middle" dominantBaseline="central">C</text></g>
@@ -1534,25 +2208,23 @@ export default function App() {
 
                         {viewMode === 'top' ? (
                           <>
-                            {hasX && renderTrussEdge(box.id, box.plan.top.pieces, CORNER_SIZE, 0, true, 'top')}
-                            {hasX && hasY && renderTrussEdge(box.id, box.plan.bottom.pieces, CORNER_SIZE, renderH - CORNER_SIZE, true, 'bottom')}
-                            {hasY && renderTrussEdge(box.id, box.plan.left.pieces, 0, CORNER_SIZE, false, 'left')}
-                            {hasX && hasY && renderTrussEdge(box.id, box.plan.right.pieces, renderW - CORNER_SIZE, CORNER_SIZE, false, 'right')}
+                            {hasX && renderTrussEdge(box.id, box.x, box.y, box.plan.top?.pieces || [], CORNER_SIZE, 0, true, 'top')}
+                            {hasX && hasY && renderTrussEdge(box.id, box.x, box.y, box.plan.bottom?.pieces || [], CORNER_SIZE, renderH - CORNER_SIZE, true, 'bottom')}
+                            {hasY && renderTrussEdge(box.id, box.x, box.y, box.plan.left?.pieces || [], 0, CORNER_SIZE, false, 'left')}
+                            {hasX && hasY && renderTrussEdge(box.id, box.x, box.y, box.plan.right?.pieces || [], renderW - CORNER_SIZE, CORNER_SIZE, false, 'right')}
                           </>
                         ) : (
                           <>
-                            {/* Renderização Visão Frontal (Elevação) */}
-                            {hasX && renderTrussEdge(box.id, box.plan.top.pieces, CORNER_SIZE, 0, true, 'top')}
-                            {hasX && hasZ && renderTrussEdge(box.id, box.plan.bottom?.pieces || [], CORNER_SIZE, renderH - CORNER_SIZE, true, 'bottom')}
-                            {hasZ && renderTrussEdge(box.id, box.plan.pillarFL.pieces, 0, CORNER_SIZE, false, 'pillarFL')}
-                            {hasX && hasZ && renderTrussEdge(box.id, box.plan.pillarFR.pieces, renderW - CORNER_SIZE, CORNER_SIZE, false, 'pillarFR')}
+                            {hasX && renderTrussEdge(box.id, box.x, box.y, box.plan.top?.pieces || [], CORNER_SIZE, 0, true, 'top')}
+                            {hasX && hasZ && renderTrussEdge(box.id, box.x, box.y, box.plan.bottom?.pieces || [], CORNER_SIZE, renderH - CORNER_SIZE, true, 'bottom')}
+                            {hasZ && renderTrussEdge(box.id, box.x, box.y, box.plan.pillarFL?.pieces || [], 0, CORNER_SIZE, false, 'pillarFL')}
+                            {hasX && hasZ && renderTrussEdge(box.id, box.x, box.y, box.plan.pillarFR?.pieces || [], renderW - CORNER_SIZE, CORNER_SIZE, false, 'pillarFR')}
                             
-                            {/* Pilares intermediários desenhados fisicamente na visão Frontal */}
                             {hasZ && hasX && box.plan.intermediatePillarsX?.map((xPos, idx) => {
                                const lineX = CORNER_SIZE + xPos;
                                return (
                                  <g key={`front-int-x-${idx}`}>
-                                   {renderTrussEdge(box.id, box.plan.pillarFL?.pieces || [], lineX, CORNER_SIZE, false, `int-x-${idx}`)}
+                                   {renderTrussEdge(box.id, box.x, box.y, box.plan.pillarFL?.pieces || [], lineX, CORNER_SIZE, false, `int-x-${idx}`)}
                                    <rect x={lineX} y={0} width={CORNER_SIZE} height={CORNER_SIZE} fill="#1e293b" stroke="#0f172a" strokeWidth="1" />
                                    <text x={lineX+7.5} y={7.5} fill="white" fontSize="8" fontWeight="bold" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: 'none' }}>C</text>
                                    <rect x={lineX} y={renderH - CORNER_SIZE} width={CORNER_SIZE} height={CORNER_SIZE} fill="#1e293b" stroke="#0f172a" strokeWidth="1" />
@@ -1564,8 +2236,65 @@ export default function App() {
                         )}
                         
                         <text x={renderW/2} y={renderH/2} fill="#cbd5e1" fontSize="24" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>{box.name}</text>
-                        {viewMode === 'top' && hasZ && <text x={renderW/2} y={renderH/2 + 25} fill="#94a3b8" fontSize="14" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>H: {actualAlt} cm</text>}
-                        {viewMode === 'front' && hasY && <text x={renderW/2} y={renderH/2 + 25} fill="#94a3b8" fontSize="14" fontWeight="bold" textAnchor="middle" style={{ pointerEvents: 'none' }}>Prof: {actH} cm</text>}
+                      </g>
+                    );
+                  })}
+
+                  {/* RENDERIZAR PEÇAS SOLTAS */}
+                  {freePieces.map(fp => {
+                    const rectW = fp.isVertical ? CORNER_SIZE : fp.length;
+                    const rectH = fp.isVertical ? fp.length : CORNER_SIZE;
+                    const isSelected = editingPiece && editingPiece.type === 'free' && editingPiece.id === fp.id;
+
+                    return (
+                      <g key={fp.id} transform={`translate(${fp.x}, ${fp.y})`}
+                         onMouseDown={(e) => {
+                            if (isExportingPDF) return;
+                            e.stopPropagation();
+                            dragMovedRef.current = false;
+                            recordHistory();
+                            setDraggingFreePiece({
+                               id: fp.id,
+                               offsetX: (e.clientX - pan.x) / scale - fp.x,
+                               offsetY: (e.clientY - pan.y) / scale - fp.y
+                            });
+                         }}
+                         onTouchStart={(e) => {
+                            if (isExportingPDF) return;
+                            e.stopPropagation();
+                            dragMovedRef.current = false;
+                            recordHistory();
+                            setDraggingFreePiece({
+                               id: fp.id,
+                               offsetX: (e.touches[0].clientX - pan.x) / scale - fp.x,
+                               offsetY: (e.touches[0].clientY - pan.y) / scale - fp.y
+                            });
+                            lastTouchRef.current.x = e.touches[0].clientX;
+                            lastTouchRef.current.y = e.touches[0].clientY;
+                         }}
+                         onClick={(e) => {
+                            e.stopPropagation();
+                            if (dragMovedRef.current) return;
+                            handlePieceClick('free', fp.id, null, 0, fp.length, 1, e.clientX, e.clientY, fp.isVertical);
+                         }}
+                         onTouchEnd={(e) => {
+                            e.stopPropagation();
+                            if (dragMovedRef.current) return;
+                            handlePieceClick('free', fp.id, null, 0, fp.length, 1, e.changedTouches[0].clientX, e.changedTouches[0].clientY, fp.isVertical);
+                         }}
+                         className="cursor-move transition-all duration-200 hover:opacity-80 group">
+                         
+                        <rect x={0} y={0} width={rectW} height={rectH} fill="#ffffff" stroke={isSelected ? "#3b82f6" : "#1e293b"} strokeWidth={isSelected ? 2 : 1}
+                          className="group-hover:fill-blue-50 group-hover:stroke-blue-500 group-hover:stroke-2" vectorEffect="non-scaling-stroke" />
+                        <line x1={fp.isVertical ? 3 : 0} y1={fp.isVertical ? 0 : 3} x2={fp.isVertical ? 3 : rectW} y2={fp.isVertical ? rectH : 3} stroke="#cbd5e1" strokeWidth="0.5" vectorEffect="non-scaling-stroke"/>
+                        <line x1={fp.isVertical ? 12 : 0} y1={fp.isVertical ? 0 : 12} x2={fp.isVertical ? 12 : rectW} y2={fp.isVertical ? rectH : 12} stroke="#cbd5e1" strokeWidth="0.5" vectorEffect="non-scaling-stroke"/>
+                        
+                        <text x={rectW/2} y={rectH/2} 
+                              transform={`rotate(${fp.isVertical ? -90 : 0} ${rectW/2} ${rectH/2})`} 
+                              textAnchor="middle" dominantBaseline="central" fontSize="6.5" 
+                              fill="#0f172a" fontWeight="800" stroke="#ffffff" strokeWidth="2.5" paintOrder="stroke" style={{ pointerEvents: 'none' }}>
+                          {fp.length}
+                        </text>
                       </g>
                     );
                   })}
